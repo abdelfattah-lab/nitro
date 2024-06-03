@@ -4,7 +4,7 @@ from optimum.intel.openvino import OVModelForCausalLM
 import os
 
 model_id = "meta-llama/Meta-Llama-3-8B"
-device = "GPU"
+device = "HETERO:GPU,CPU"
 model_ir = "ov_model"
 
 # check if the folder exists

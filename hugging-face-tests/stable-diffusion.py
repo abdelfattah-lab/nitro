@@ -30,5 +30,10 @@ init_image = Image.open(BytesIO(response.content)).convert("RGB")
 init_image = init_image.resize((768, 512))
 prompt = "A fantasy landscape, trending on artstation"
 
-image = pipeline(prompt=prompt, image=init_image, strength=0.75, guidance_scale=7.5).images[0]
+image = pipeline(prompt=prompt,
+                 image=init_image,
+                 strength=0.75,
+                 num_inference_steps=50,
+                 guidance_scale=5
+                ).images[0]
 image.save("fantasy_landscape-x.png")
