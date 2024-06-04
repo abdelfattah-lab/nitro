@@ -1,6 +1,9 @@
 from torchvision.io import read_image
 from torchvision.models import resnet50, ResNet50_Weights
 import requests, PIL, io, torch
+import openvino.runtime.passes as passes
+
+
 # Get a picture of a cat from the web:
 img = PIL.Image.open(io.BytesIO(requests.get("https://placekitten.com/200/300").content))
 
@@ -11,7 +14,7 @@ model.eval()
 preprocess = weights.transforms()
 batch = preprocess(img).unsqueeze(0)
 # PyTorch model inference and post-processing
-prediction = model(batch).squeeze(0).softmax(0)
+prediction = model(batch).squeeze(0)
 print(prediction)
 class_id = prediction.argmax().item()
 score = prediction[class_id].item()
@@ -22,7 +25,7 @@ print(f"{category_name}: {100 * score:.1f}% (with PyTorch)")
 import openvino as ov
 converted_model = ov.convert_model(model, example_input=batch)
 compiled_model = ov.compile_model(converted_model, device_name="GPU")
-prediction = torch.tensor(compiled_model(batch)[0]).squeeze(0).softmax(0)
+prediction = torch.tensor(compiled_model(batch)[0]).squeeze(0)
 print(prediction)
 class_id = prediction.argmax().item()
 score = prediction[class_id].item()

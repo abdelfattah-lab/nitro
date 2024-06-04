@@ -1,3 +1,5 @@
 models
 images
 *.png
+__pycache__
+*.txt
