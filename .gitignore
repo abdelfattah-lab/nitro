@@ -3,3 +3,8 @@ images
 *.png
 __pycache__
 *.txt
+
+*.bin
+*.xml
+*.svg
+*.dot
