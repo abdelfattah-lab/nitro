@@ -1,9 +1,8 @@
-models
 images
-*.png
 __pycache__
-*.txt
 
+*.png
+*.txt
 *.bin
 *.xml
 *.svg
