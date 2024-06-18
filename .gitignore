@@ -3,7 +3,6 @@ __pycache__
 
 *.png
 *.txt
-*.bin
-*.xml
+models/
 *.svg
 *.dot
