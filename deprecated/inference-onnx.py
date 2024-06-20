@@ -18,27 +18,70 @@ text_input = ["Two plus two is"]
 USE_GREEDY = False
 
 # Read tokenizer, detokenizer models
-ov_tokenizer = core.read_model(f"/home/abdelfattah/openvino-llama/hugging-face-llama/models/llama3_onnx/openvino_tokenizer.xml")
-ov_detokenizer = core.read_model(f"/home/abdelfattah/openvino-llama/hugging-face-llama/models/llama3_onnx/openvino_detokenizer.xml")
+ov_tokenizer = core.read_model(f"{MODEL_DIRECTORY}/openvino_tokenizer.xml")
+ov_detokenizer = core.read_model(f"{MODEL_DIRECTORY}/openvino_detokenizer.xml")
 tokenizer, detokenizer = core.compile_model(ov_tokenizer), core.compile_model(ov_detokenizer)
 
-model = core.read_model(f"/home/abdelfattah/openvino-llama/hugging-face-llama/models/llama3_onnx/openvino_model.xml")
+model = core.read_model(f"{MODEL_DIRECTORY}/openvino_model_modified.xml")
 
 # Heterogeneous configuration
 device = "HETERO:CPU,GPU,NPU"
 
 operation_mappings = {
-    "MatMul":"NPU",
-    # "Swish":"GPU",
-    # "Softmax":"GPU"
+    "Q":"GPU",
+    "K":"CPU",
+    "V": "CPU",
 }
 
+import xml.etree.ElementTree as ET
+
+tree = ET.parse(f"{MODEL_DIRECTORY}/openvino_model.xml")
+root = tree.getroot()
+
+# Caching purposes
+idx_to_name = {} # layer id in xml -> name
+name_to_idx = {}
+for layer in sorted(root.findall('.//layer'), key=lambda x: int(x.get('id'))): # traverse layers in the .xml file
+    id, name, type = int(layer.get('id')), layer.get('name'), layer.get('type')
+    idx_to_name[id] = name
+    name_to_idx[name] = id
+
+# Store nodes into q, k, and v groups
+q_group, k_group, v_group = set(), set(), set()
+
+# Extremely hard coded
+for i in range(2, 31): # transformer blocks 0-31
+    print(i)
+    
+    q = name_to_idx[f"/model/layers.{i}/self_attn/q_proj/MatMul"]
+    for j in range(q, q+50):
+        q_group.add(idx_to_name[j])
+    k = name_to_idx[f"/model/layers.{i}/self_attn/k_proj/MatMul"]
+    for j in range(k, k+80):
+        k_group.add(idx_to_name[j])
+    v = name_to_idx[f"/model/layers.{i}/self_attn/v_proj/MatMul"]
+    for j in range(v, v+30):
+        if j in idx_to_name:
+            v_group.add(idx_to_name[j])
+
+q_count = k_count = v_count = 0
 for node in model.get_ops():
-    op = node.get_type_name()
-    if op in operation_mappings:
-        node.get_rt_info()["affinity"] = "GPU"
+    op = node.get_friendly_name()
+    if op in q_group:
+        node.get_rt_info()["affinity"] = operation_mappings["Q"]
+        q_count += 1
+    elif op in k_group:
+        node.get_rt_info()["affinity"] = operation_mappings["K"]
+        k_count += 1
+    elif op in v_group:
+        node.get_rt_info()["affinity"] = operation_mappings["V"]
+        v_count += 1
     else:
         node.get_rt_info()["affinity"] = "CPU"
+
+print("Q count:", q_count)
+print("K count:", k_count)
+print("V count:", v_count)
 
 # Compile model
 if USE_GREEDY:

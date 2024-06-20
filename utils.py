@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 def print_bold(text):
-    # ANSI escape code for bold
     print(f"\033[1m{text}\033[0m")
 
 def load_model(model_id:str=None,
