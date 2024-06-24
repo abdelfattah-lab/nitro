@@ -8,3 +8,7 @@ models/
 *.dot
 
 .trash/
+
+# Generated files from npu-accelerate library
+cache/
+nc_workspace/

@@ -20,8 +20,8 @@ def visualize_example(m:ov.Model, model_name:str='image'):
     output is a .dot file that is viewable from a dot loader, e.g.
     https://dreampuf.github.io/GraphvizOnline/
     """
-    file = _ensure_path_prefix(model_name)
-    file = os.path.join(file, model_name + ".svg")
+    # file = _ensure_path_prefix(model_name)
+    file = model_name + ".svg"
     pass_manager = passes.Manager()
     pass_manager.register_pass(passes.VisualizeTree(file_name=file))
     pass_manager.run_passes(m)
