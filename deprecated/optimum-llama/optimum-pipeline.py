@@ -3,10 +3,12 @@ from transformers import AutoTokenizer
 import openvino.properties.device
 import time
 
-model_id = "/home/abdelfattah/openvino-llama/models/llama3_optimum/"
+model_id = "models/llama3_optimum/"
 
-model:OVModelForCausalLM = OVModelForCausalLM.from_pretrained(model_id, device="CPU")
-
+model:OVModelForCausalLM = OVModelForCausalLM.from_pretrained(model_id, compile=False)
+model.generation_config.cache_implementation = "static"
+model.to("GPU")
+model.compile()
 # inference
 prompt = "What is the meaning of"
 tokenizer = AutoTokenizer.from_pretrained(model_id)

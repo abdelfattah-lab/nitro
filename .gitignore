@@ -1,6 +1,8 @@
 images
 __pycache__
 
+*.xml
+*.bin
 *.png
 *.txt
 models/

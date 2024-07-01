@@ -94,24 +94,24 @@ ov_model = ov.convert_model(ffn, example_input=input_tensor, input=[seq_length, 
 core = ov.Core()
 
 #### Dynamic ####
-for device in ["CPU", "GPU"]:
+# for device in ["CPU", "GPU"]:
 
-    # Compilation
-    start = time.time()
-    model = core.compile_model(ov_model, device_name=device)
-    print(f"{device} Compile time: {time.time() - start}")
+#     # Compilation
+#     start = time.time()
+#     model = core.compile_model(ov_model, device_name=device)
+#     print(f"{device} Compile time: {time.time() - start}")
 
-    # Inference, 1000 times
-    start = time.time()
-    for _ in range(1000):
-        input = torch.rand(seq_length, batch_size, dim)
-        output = model(input)
-    print(f"{device} Inference time: {time.time() - start}")
+#     # Inference, 1000 times
+#     start = time.time()
+#     for _ in range(1000):
+#         input = torch.rand(seq_length, batch_size, dim)
+#         output = model(input)
+#     print(f"{device} Inference time: {time.time() - start}")
 
-ov_model = ov.convert_model(ffn, example_input=input_tensor)
+# ov_model = ov.convert_model(ffn, example_input=input_tensor)
 
 #### Static ####
-for device in ["CPU", "GPU", "NPU"]:
+for device in ["NPU"]:
 
     # Compilation
     start = time.time()

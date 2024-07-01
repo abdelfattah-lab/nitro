@@ -8,7 +8,7 @@ import openvino.runtime.passes as passes
 
 core = ov.Core()
 
-TOKEN_SEQUENCE_LENGTH = 256
+TOKEN_SEQUENCE_LENGTH = 64
 
 # Model conversion from Optimum model to Llama model
 port_to_shape = {

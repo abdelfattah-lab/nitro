@@ -12,10 +12,10 @@ import openvino_tokenizers
 import numpy as np
 
 # Parameters
-TOKEN_SEQUENCE_LENGTH = 256
-PROMPT = ["What is the meaning of life?"]
+TOKEN_SEQUENCE_LENGTH = 64
+PROMPT = ["What is the meaning of"]
 SAMPLE = False
-COMPRESS = False
+COMPRESS = True
 SAVE_COMPRESS = True
 TEMPERATURE = 0.7
 
@@ -23,7 +23,7 @@ TEMPERATURE = 0.7
 core = ov.Core()
 directory = Path("models/llama3_onnx/")
 
-ov_model = core.read_model(directory / "openvino_model_static_compressed.xml")
+ov_model = core.read_model(directory / "openvino_model_static.xml")
 
 if COMPRESS:
     ov_model = compress_weights(ov_model, mode=CompressWeightsMode.INT8_ASYM)
@@ -35,7 +35,7 @@ ov_detokenizer = core.read_model(directory / "openvino_detokenizer.xml")
 tokenizer, detokenizer = core.compile_model(ov_tokenizer), core.compile_model(ov_detokenizer)
 
 start = time.time()
-compiled_model = ov.compile_model(ov_model, device_name="GPU")
+compiled_model = ov.compile_model(ov_model, device_name="CPU")
 print("Compilation time:", time.time() - start, "\n")
 
 # Produce starting inputs

@@ -3,23 +3,22 @@ import torch
 import torch.nn.functional as F
 import math
 from dataclasses import dataclass
-from helpers import repeat_kv, precompute_freqs_cis, apply_rotary_emb_rectangular, print_shape
-from typing import Tuple, List
+from model.helpers import repeat_kv, apply_rotary_emb_rectangular
 
 @dataclass
 class ModelArgs:
-    dim: int = 1024
+    dim: int = 4096
     n_layers: int = 32
     n_heads: int = 32
-    n_kv_heads: int = 32
+    n_kv_heads: int = 8
     vocab_size: int = 128256
-    multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
-    ffn_dim_multiplier: int = 1
+    multiple_of: int = 1024  # make SwiGLU hidden layer size multiple of large power of 2
+    ffn_dim_multiplier: int = 1.3
     norm_eps: float = 1e-5
     rope_theta: float = 500000
 
-    max_batch_size: int = 32
-    max_seq_len: int = 2048
+    max_batch_size: int = 1
+    max_seq_len: int = 512
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -48,7 +47,6 @@ class FeedForward(nn.Module):
         hidden_dim = int(ffn_dim_multiplier * hidden_dim)
         
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        hidden_dim = 14336 # NOT SURE WHY THIS COMPUTES TO A DIFFERENT VALUE 
         self.w1 = nn.Linear(dim, hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
         self.w3 = nn.Linear(dim, hidden_dim, bias=False)
@@ -167,8 +165,8 @@ class Transformer(nn.Module):
     def forward(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                cache_k: List[torch.Tensor],
-                cache_v: List[torch.Tensor]
+                cache_k: list[torch.Tensor],
+                cache_v: list[torch.Tensor]
                 ):
         h = self.tok_embeddings(x)
         cache_k_out = []

@@ -1,36 +1,59 @@
-from config import ModelArgs
+from model.rewritten_models import ModelArgs
 from pathlib import Path
 import openvino as ov
 import torch
 import torch.nn as nn
 from typing import Optional
 import numpy as np
+import nncf
+import time
 
 # These two imports are essential to ensure that the tokenizers can be imported.
 from transformers import AutoTokenizer
 from openvino_tokenizers import convert_tokenizer
+
+verbose=True
+def timer(title="Function"):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            if verbose:
+                start_time = time.time()
+                result = func(*args, **kwargs)
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                print(f"{title} time elapsed: {elapsed_time:.4f} seconds")
+            else:
+                result = func(*args, **kwargs)
+            return result
+        return wrapper
+    return decorator
 
 class Llama:
     def __init__(self,
                  model_path: Path | str,
                  device:str,
                  args: ModelArgs,
-                 tokenizer:str="openvino_tokenizer.xml",
-                 detokenizer:str="openvino_detokenizer.xml"
+                 tokenizer:str="openvino_model/openvino_tokenizer.xml",
+                 detokenizer:str="openvino_model/openvino_detokenizer.xml",
+                 verbose:bool=True
                  ):
+        self.verbose = verbose
 
         # OpenVINO models as the backend
         core = ov.Core()
-        self.model = ov.compile_model(model_path, device_name=device)
+        self.model = core.read_model(model_path)
+        self.model = nncf.compress_weights(self.model)
+        self.model = core.compile_model(self.model, device)
         self.tokenizer = core.compile_model(tokenizer, "CPU")
         self.detokenizer = core.compile_model(detokenizer, "CPU")
 
         # KV-cache, mask instantiations - these are inputs
+        # TODO: This is a pretty jank way of doing this. Convert all to [args] arguments.
         self.k_cache = torch.zeros(eval(self.model.input("cache_k").get_shape().to_string()))
         self.v_cache = torch.zeros(eval(self.model.input("cache_v").get_shape().to_string()))
         self.mask = torch.full(eval(self.model.input("mask").get_shape().to_string()), float("-inf"))
 
-        # Token embeddings, if done outside the model
+        # Token embeddings, if done outside the model.
         # self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
 
         self.freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads,
@@ -90,7 +113,7 @@ class Llama:
 
             self._update_mask(i)
             fs = self.freqs_cis[i:i+1]
-            # x = embedding(tok_embeddings, torch.tensor(t).view(1, -1)) # HARD-CODED TO BE B = L = 1: [B,L,DIM]
+            # x = embedding(tok_embeddings, torch.tensor(t).view(1, -1))
             output = self.model({
                 "cache_v": self.v_cache,
                 "cache_k": self.k_cache,
@@ -109,7 +132,7 @@ class Llama:
         """
         Updates [self.mask] - must be updated with each new token.
         """
-        self.mask[:,:,:,-1-step:] = 0
+        self.mask[:,:,:,-1-step] = 0
 
     def _generate_tokens(self, prompt) -> str:
         """
@@ -134,5 +157,6 @@ class Llama:
         outputs = self.detokenizer(np.array(tokens).reshape(1, -1))
         return outputs["string_output"]
 
-llama = Llama("llama.xml", "CPU", ModelArgs())
-print(llama.generate(["Hello, how are you?"], 20))
+if __name__ == "__main__":
+    llama = Llama("openvino_model/llama.xml", "CPU", ModelArgs())
+    print(llama.generate(["Once upon a midnight dreary,"], 30))

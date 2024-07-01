@@ -5,7 +5,6 @@ import openvino.runtime.passes as passes
 import torch
 import torch.nn as nn
 
-from config import *
 from utils import visualize_example
 
 core = ov.Core()
