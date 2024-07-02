@@ -1,4 +1,4 @@
-from model.rewritten_models import ModelArgs
+from model.config import ModelArgs
 from pathlib import Path
 import openvino as ov
 import torch
@@ -35,11 +35,14 @@ class Llama:
                  args: ModelArgs,
                  tokenizer:str="openvino_model/openvino_tokenizer.xml",
                  detokenizer:str="openvino_model/openvino_detokenizer.xml",
-                 verbose:bool=True
+                 embedding:bool=False,
+                 verbose:bool=False
                  ):
         self.verbose = verbose
 
+        start = time.time()
         # OpenVINO models as the backend
+        self._print_if_verbose("Compiling models", "asdf")
         core = ov.Core()
         self.model = core.read_model(model_path)
         self.model = nncf.compress_weights(self.model)
@@ -49,16 +52,23 @@ class Llama:
 
         # KV-cache, mask instantiations - these are inputs
         # TODO: This is a pretty jank way of doing this. Convert all to [args] arguments.
+        self._print_if_verbose("Instantiating Parameters")
         self.k_cache = torch.zeros(eval(self.model.input("cache_k").get_shape().to_string()))
         self.v_cache = torch.zeros(eval(self.model.input("cache_v").get_shape().to_string()))
         self.mask = torch.full(eval(self.model.input("mask").get_shape().to_string()), float("-inf"))
 
         # Token embeddings, if done outside the model.
-        # self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
+        if embedding:
+            self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim).eval() # THIS THING NEEDS TO BE LOADED IN AS WELL
+        else:
+            self.tok_embeddings = lambda x : x
 
         self.freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads,
                                                     args.max_seq_len * 2,
                                                     args.rope_theta)
+    
+        elapsed = time.time() - start
+        self._print_if_verbose(f"Finished pre-processing. Elapsed time: {elapsed:.4f}")
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
         """
@@ -78,20 +88,27 @@ class Llama:
         
         k_cache, v_cache, mask are all updated.
         """
+        average_time = 0
+        
         for i, token in enumerate(tokens):
+            start = time.time()
             self._update_mask(i)
             fs = self.freqs_cis[i:i+1]
-            # x = embedding(tok_embeddings, torch.tensor(token).view(1, -1))
+
             output = self.model({
                 "cache_v": self.v_cache,
                 "cache_k": self.k_cache,
                 "mask": self.mask,
                 "freqs_cis": fs,
-                "x": torch.tensor([[token]])
+                "x": self.tok_embeddings(torch.tensor([[token]])).detach()
             })
             self.k_cache = output[1]
             self.v_cache = output[2]
-        
+
+            elapsed = time.time() - start
+            average_time = (average_time * i + elapsed) / (i + 1)
+            self._print_if_verbose(">>", elapsed)
+        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
 
     def _decode(self, tokens:list[int], first_token:torch.Tensor, max_new_tokens:int) -> list[int]:
         """
@@ -99,34 +116,46 @@ class Llama:
         it.
         
         Parameters:
-        tokens (list[int]) : tokens from the prompt.
-        first_token (int) : first token in the decode stage, which is the last token in the input sequence.
-        max_new_tokens (int) : number of new tokens to generate.
+        tokens (list[int])      : tokens from the prompt.
+        first_token (int)       : first token in the decode stage, which is the last token in the input sequence.
+        max_new_tokens (int)    : number of new tokens to generate.
         
         Returns:
-        tokens: list[int] : complete token sequence.
+        tokens: list[int]       : complete token sequence.
         """
         next_token = first_token
         start_idx = len(tokens)
-        for i in range(start_idx, start_idx+max_new_tokens):
-            tokens.append(next_token)
 
+        average_time = 0
+        for i in range(start_idx, start_idx+max_new_tokens):
+            start = time.time()
+
+            tokens.append(next_token)
             self._update_mask(i)
             fs = self.freqs_cis[i:i+1]
-            # x = embedding(tok_embeddings, torch.tensor(t).view(1, -1))
             output = self.model({
                 "cache_v": self.v_cache,
                 "cache_k": self.k_cache,
                 "mask": self.mask,
                 "freqs_cis": fs,
-                "x": torch.tensor([[next_token]])
+                "x": self.tok_embeddings(torch.tensor([[next_token]])).detach()
             })
+            
             logits = output[0]
             self.k_cache = output[1]
             self.v_cache = output[2]
             next_token = np.argmax(logits.squeeze()) # TODO: ADD OPTION FOR VARIATION
+
+            elapsed = time.time() - start
+            average_time = (average_time * (i - start_idx) + elapsed) / (i - start_idx + 1)
+            self._print_if_verbose(">>", elapsed)
+        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
     
         return tokens
+
+    def _print_if_verbose(self, *text) -> None:
+        if self.verbose:
+            print(*text)
     
     def _update_mask(self, step:int) -> None:
         """
@@ -143,7 +172,17 @@ class Llama:
     def generate(self,
                  prompt: list[str],
                  max_new_tokens: Optional[int]
-                 ) -> None:
+                 ) -> list[str]:
+        """
+        Runs inference for text generation.
+
+        Parameters:
+        prompt (list[str])      : input string prompt.
+        max_new_tokens (int)    : number of new tokens to generate.
+
+        Returns:
+        tokens (list[str])      : completed text, new tokens with original prompt.
+        """
         tokens = self._generate_tokens(prompt)
         next_token = tokens.pop()
 
@@ -158,5 +197,12 @@ class Llama:
         return outputs["string_output"]
 
 if __name__ == "__main__":
-    llama = Llama("openvino_model/llama.xml", "CPU", ModelArgs())
-    print(llama.generate(["Once upon a midnight dreary,"], 30))
+
+    llama = Llama(model_path="openvino_model/llama-lite.xml",
+                  device="GPU",
+                  args=ModelArgs(),
+                  embedding=False,
+                  verbose=True)
+    
+    print(llama.generate(["What is going on"],
+                         max_new_tokens=30))

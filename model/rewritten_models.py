@@ -2,23 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import math
-from dataclasses import dataclass
 from model.helpers import repeat_kv, apply_rotary_emb_rectangular
-
-@dataclass
-class ModelArgs:
-    dim: int = 4096
-    n_layers: int = 32
-    n_heads: int = 32
-    n_kv_heads: int = 8
-    vocab_size: int = 128256
-    multiple_of: int = 1024  # make SwiGLU hidden layer size multiple of large power of 2
-    ffn_dim_multiplier: int = 1.3
-    norm_eps: float = 1e-5
-    rope_theta: float = 500000
-
-    max_batch_size: int = 1
-    max_seq_len: int = 512
+from model.config import ModelArgs
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -61,9 +46,8 @@ class Attention(nn.Module):
     def __init__(self, args:ModelArgs):
         super().__init__()
         self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
-        model_parallel_size = 1
-        self.n_local_heads = args.n_heads // model_parallel_size
-        self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
+        self.n_local_heads = args.n_heads
+        self.n_local_kv_heads = self.n_kv_heads
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
 
@@ -168,6 +152,7 @@ class Transformer(nn.Module):
                 cache_k: list[torch.Tensor],
                 cache_v: list[torch.Tensor]
                 ):
+        h = x
         h = self.tok_embeddings(x)
         cache_k_out = []
         cache_v_out = []
