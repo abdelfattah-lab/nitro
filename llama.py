@@ -35,24 +35,29 @@ class Llama:
                  args: ModelArgs,
                  tokenizer:str="openvino_model/openvino_tokenizer.xml",
                  detokenizer:str="openvino_model/openvino_detokenizer.xml",
+                 compile:bool=True,
                  embedding:bool=False,
                  verbose:bool=False
                  ):
         self.verbose = verbose
+        self.device = device
 
         start = time.time()
         # OpenVINO models as the backend
-        self._print_if_verbose("Compiling models", "asdf")
+        self._print_if_verbose("Importing model...")
         core = ov.Core()
         self.model = core.read_model(model_path)
-        self.model = nncf.compress_weights(self.model)
-        self.model = core.compile_model(self.model, device)
+        # self.model = nncf.compress_weights(self.model)
+        if compile:
+            self._print_if_verbose(f"Compiling model to {self.device}...")
+            self.model = core.compile_model(self.model, self.device)
+        self._print_if_verbose("Compiling tokenizers...")
         self.tokenizer = core.compile_model(tokenizer, "CPU")
         self.detokenizer = core.compile_model(detokenizer, "CPU")
 
         # KV-cache, mask instantiations - these are inputs
         # TODO: This is a pretty jank way of doing this. Convert all to [args] arguments.
-        self._print_if_verbose("Instantiating Parameters")
+        self._print_if_verbose("Instantiating Parameters...")
         self.k_cache = torch.zeros(eval(self.model.input("cache_k").get_shape().to_string()))
         self.v_cache = torch.zeros(eval(self.model.input("cache_v").get_shape().to_string()))
         self.mask = torch.full(eval(self.model.input("mask").get_shape().to_string()), float("-inf"))
@@ -69,6 +74,15 @@ class Llama:
     
         elapsed = time.time() - start
         self._print_if_verbose(f"Finished pre-processing. Elapsed time: {elapsed:.4f}")
+
+    def compile(self, device:str=None):
+        if device is not None:
+            self.device = device
+        start = time.time()
+        self._print_if_verbose(f"Compiling to {self.device}...")
+        self.model = ov.compile_model(self.model, self.device)
+        self._print_if_verbose(f"Compiled in {(time.time() - start):.4f} seconds")
+        pass
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
         """
@@ -199,10 +213,31 @@ class Llama:
 if __name__ == "__main__":
 
     llama = Llama(model_path="openvino_model/llama-lite.xml",
-                  device="GPU",
+                  device="HETERO:CPU,GPU,NPU",
+                #   device="HETERO:CPU,GPU",
                   args=ModelArgs(),
+                  compile=False,
                   embedding=False,
                   verbose=True)
     
+    llama_backend = llama.model
+    
+    # Heterogeneous configurations
+
+    count = 0
+    cont = False
+    for node in llama_backend.get_ops():
+        name = node.get_friendly_name()
+        if name.startswith("__module.layers.30.") or cont:
+            node.get_rt_info()["affinity"] = "GPU"
+            cont = True
+        else:
+            node.get_rt_info()["affinity"] = "CPU"
+        
+    print(f"Operations pushed: {count}")
+
+    llama.compile()
+
+    print("Compliation done")
     print(llama.generate(["What is going on"],
                          max_new_tokens=30))

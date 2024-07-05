@@ -80,7 +80,7 @@ class Attention(nn.Module):
         keys = cache_k[:bsz]
         values = cache_v[:bsz]
 
-        keys = repeat_kv(keys, self.n_rep) 
+        keys = repeat_kv(keys, self.n_rep)
         values = repeat_kv(values, self.n_rep)
 
         xq = xq.transpose(1, 2)
