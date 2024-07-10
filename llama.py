@@ -20,6 +20,7 @@ class Llama:
                  tokenizer:str="openvino_model/openvino_tokenizer.xml",
                  detokenizer:str="openvino_model/openvino_detokenizer.xml",
                  compile:bool=True,
+                 compress:bool=True,
                  embedding:bool=True,
                  verbose:bool=False
                  ):
@@ -32,7 +33,8 @@ class Llama:
         self._print_if_verbose("Importing model...")
         core = ov.Core()
         self.model = core.read_model(model_path)
-        # self.model = nncf.compress_weights(self.model, mode=nncf.CompressWeightsMode.INT8_ASYM)
+        if compress:
+            self.model = nncf.compress_weights(self.model, mode=nncf.CompressWeightsMode.INT8_ASYM)
         if compile:
             self._print_if_verbose(f"Compiling model to {self.device}...")
             self.model = core.compile_model(self.model, self.device)
