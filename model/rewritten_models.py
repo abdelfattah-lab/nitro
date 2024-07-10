@@ -74,6 +74,7 @@ class Attention(nn.Module):
 
         xq, xk = apply_rotary_emb_rectangular(xq, xk, freqs_cis=freqs_cis)
 
+        # It might be more efficient to use torch.roll. However, the Torchscript doesn't quite convert successfully.
         cache_k = torch.cat((cache_k[:, seqlen:], xk), dim=1)
         cache_v = torch.cat((cache_v[:, seqlen:], xv), dim=1)
 
@@ -86,12 +87,19 @@ class Attention(nn.Module):
         xq = xq.transpose(1, 2)
         keys = keys.transpose(1, 2) 
         values = values.transpose(1, 2)
+
+        # Scaled Dot Product Attention
+        # output = nn.functional.scaled_dot_product_attention(xq, keys, values, mask, 0, False)
+
+        # Manual
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
-        
         scores = scores + mask
         scores = F.softmax(scores.float(), dim=-1).type_as(xq) # HMM????
         output = torch.matmul(scores, values)
+        
+        # Output
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+
         out = self.wo(output)
         return out, cache_k, cache_v
 
@@ -149,23 +157,24 @@ class Transformer(nn.Module):
     def forward(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                cache_k: list[torch.Tensor],
-                cache_v: list[torch.Tensor]
-                ):
-        h = x
-        h = self.tok_embeddings(x)
-        cache_k_out = []
-        cache_v_out = []
+                params: dict):
         
-        for i in range(self.n_layers):
-            h, cache_k_out_, cache_v_out_ = self.layers[i](h, mask, freqs_cis, cache_k[i], cache_v[i])
-            cache_k_out.append(cache_k_out_.unsqueeze(0))
-            cache_v_out.append(cache_v_out_.unsqueeze(0))
-        
-        cache_k_out = torch.concat(cache_k_out, dim=0)
-        cache_v_out = torch.concat(cache_v_out, dim=0)
+        # Assume the first 32 args are cache_k and the next 32 args are cache_v
+        cache_k = [params.get(f'cache_k_{i}', torch.zeros([1])) for i in range(32)]
+        cache_v = [params.get(f'cache_v_{i}', torch.zeros([1])) for i in range(32)]
 
-        h = self.norm(h)
-        out = h
-        out = self.output(h).float()
-        return out, cache_k_out, cache_v_out
+        x = self.tok_embeddings(x)
+        cache_k_outs = []
+        cache_v_outs = []
+
+        for i in range(self.n_layers):
+            x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, cache_k[i], cache_v[i])
+            cache_k_outs.append(cache_k_out_)
+            cache_v_outs.append(cache_v_out_)
+
+        x = self.norm(x)
+        out = x
+        out = self.output(x).float()
+
+        # Return the output along with the cache tensors
+        return out, *cache_k_outs, *cache_v_outs

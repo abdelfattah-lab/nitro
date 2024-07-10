@@ -6,9 +6,11 @@ __pycache__
 *.png
 *.txt
 models/
+model_cache/
 *.svg
 *.dot
 
+build/
 .trash/
 
 # Generated files from npu-accelerate library

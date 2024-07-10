@@ -12,22 +12,6 @@ import time
 from transformers import AutoTokenizer
 from openvino_tokenizers import convert_tokenizer
 
-verbose=True
-def timer(title="Function"):
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            if verbose:
-                start_time = time.time()
-                result = func(*args, **kwargs)
-                end_time = time.time()
-                elapsed_time = end_time - start_time
-                print(f"{title} time elapsed: {elapsed_time:.4f} seconds")
-            else:
-                result = func(*args, **kwargs)
-            return result
-        return wrapper
-    return decorator
-
 class Llama:
     def __init__(self,
                  model_path: Path | str,
@@ -36,18 +20,19 @@ class Llama:
                  tokenizer:str="openvino_model/openvino_tokenizer.xml",
                  detokenizer:str="openvino_model/openvino_detokenizer.xml",
                  compile:bool=True,
-                 embedding:bool=False,
+                 embedding:bool=True,
                  verbose:bool=False
                  ):
         self.verbose = verbose
         self.device = device
+        self.n_layers = args.n_layers
 
         start = time.time()
         # OpenVINO models as the backend
         self._print_if_verbose("Importing model...")
         core = ov.Core()
         self.model = core.read_model(model_path)
-        # self.model = nncf.compress_weights(self.model)
+        # self.model = nncf.compress_weights(self.model, mode=nncf.CompressWeightsMode.INT8_ASYM)
         if compile:
             self._print_if_verbose(f"Compiling model to {self.device}...")
             self.model = core.compile_model(self.model, self.device)
@@ -56,15 +41,18 @@ class Llama:
         self.detokenizer = core.compile_model(detokenizer, "CPU")
 
         # KV-cache, mask instantiations - these are inputs
-        # TODO: This is a pretty jank way of doing this. Convert all to [args] arguments.
         self._print_if_verbose("Instantiating Parameters...")
-        self.k_cache = torch.zeros(eval(self.model.input("cache_k").get_shape().to_string()))
-        self.v_cache = torch.zeros(eval(self.model.input("cache_v").get_shape().to_string()))
+        print(self.model)
+        self.k_cache = {}
+        self.v_cache = {}
+        for i in range(args.n_layers):
+            self.k_cache[f"cache_k_{i}"] = torch.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
+            self.v_cache[f"cache_v_{i}"] = torch.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
         self.mask = torch.full(eval(self.model.input("mask").get_shape().to_string()), float("-inf"))
 
         # Token embeddings, if done outside the model.
         if embedding:
-            self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim).eval() # THIS THING NEEDS TO BE LOADED IN AS WELL
+            self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim).eval() # THIS THING NEEDS TO BE LOADED IN AS WELL.
         else:
             self.tok_embeddings = lambda x : x
 
@@ -80,7 +68,12 @@ class Llama:
             self.device = device
         start = time.time()
         self._print_if_verbose(f"Compiling to {self.device}...")
-        self.model = ov.compile_model(self.model, self.device)
+
+        # Experimental properties
+        core = ov.Core()
+
+        self.model = core.compile_model(self.model, self.device)
+
         self._print_if_verbose(f"Compiled in {(time.time() - start):.4f} seconds")
         pass
 
@@ -109,15 +102,22 @@ class Llama:
             self._update_mask(i)
             fs = self.freqs_cis[i:i+1]
 
-            output = self.model({
-                "cache_v": self.v_cache,
-                "cache_k": self.k_cache,
+            # Preparing the inputs
+            inputs = {
                 "mask": self.mask,
                 "freqs_cis": fs,
-                "x": self.tok_embeddings(torch.tensor([[token]])).detach()
-            })
-            self.k_cache = output[1]
-            self.v_cache = output[2]
+                "x": torch.tensor([[token]])
+            }
+            inputs.update(self.k_cache)
+            inputs.update(self.v_cache)
+
+            # Running inference
+            output = self.model(inputs)
+            
+            # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
+            for j in range(0, self.n_layers):
+                self.k_cache[f"cache_k_{j}"] = output[f"cache_k_{j}_out"]
+                self.v_cache[f"cache_v_{j}"] = output[f"cache_v_{j}_out"]
 
             elapsed = time.time() - start
             average_time = (average_time * i + elapsed) / (i + 1)
@@ -147,18 +147,28 @@ class Llama:
             tokens.append(next_token)
             self._update_mask(i)
             fs = self.freqs_cis[i:i+1]
-            output = self.model({
-                "cache_v": self.v_cache,
-                "cache_k": self.k_cache,
+
+            # Preparing inputs
+            inputs = {
                 "mask": self.mask,
                 "freqs_cis": fs,
-                "x": self.tok_embeddings(torch.tensor([[next_token]])).detach()
-            })
+                "x": torch.tensor([[next_token]])
+            }
+            inputs.update(self.k_cache)
+            inputs.update(self.v_cache)
+
+            # Running inference
+            output = self.model(inputs)
+
+            # Logits
+            logits = output["logits"]
             
-            logits = output[0]
-            self.k_cache = output[1]
-            self.v_cache = output[2]
+            # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
+            for j in range(0, self.n_layers):
+                self.k_cache[f"cache_k_{j}"] = output[f"cache_k_{j}_out"]
+                self.v_cache[f"cache_v_{j}"] = output[f"cache_v_{j}_out"]
             next_token = np.argmax(logits.squeeze()) # TODO: ADD OPTION FOR VARIATION
+            # print(logits.shape)
 
             elapsed = time.time() - start
             average_time = (average_time * (i - start_idx) + elapsed) / (i - start_idx + 1)
@@ -212,32 +222,17 @@ class Llama:
 
 if __name__ == "__main__":
 
-    llama = Llama(model_path="openvino_model/llama-lite.xml",
-                  device="HETERO:CPU,GPU,NPU",
-                #   device="HETERO:CPU,GPU",
-                  args=ModelArgs(),
+
+    llama = Llama(model_path="openvino_model/llama.xml",
+                  device="GPU",
+                  args=ModelArgs(n_layers=32, max_batch_size=1, max_seq_len=128),
                   compile=False,
                   embedding=False,
                   verbose=True)
     
     llama_backend = llama.model
-    
-    # Heterogeneous configurations
 
-    count = 0
-    cont = False
-    for node in llama_backend.get_ops():
-        name = node.get_friendly_name()
-        if name.startswith("__module.layers.30.") or cont:
-            node.get_rt_info()["affinity"] = "GPU"
-            cont = True
-        else:
-            node.get_rt_info()["affinity"] = "CPU"
-        
-    print(f"Operations pushed: {count}")
-
+    # raise Exception
     llama.compile()
 
-    print("Compliation done")
-    print(llama.generate(["What is going on"],
-                         max_new_tokens=30))
+    print(llama.generate(["What is going on"], max_new_tokens=30))
