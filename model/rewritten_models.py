@@ -11,11 +11,16 @@ class RMSNorm(torch.nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    def _norm(self, x:torch.Tensor):
+        x_squared = x.pow(2)
+        x_means = x_squared.mean(-1, keepdim=True)
+        x_means += self.eps
+        x_denom = torch.sqrt(x_means)
+        return torch.div(x, x_denom)
 
-    def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
+    def forward(self, x:torch.Tensor):
+        output = self._norm(x)
+        # propagate = output.clone().detach()
         return output * self.weight
 
 class FeedForward(nn.Module):
@@ -64,9 +69,9 @@ class Attention(nn.Module):
         cache_k: torch.Tensor,      # [MB, ML, KVH, H]
         cache_v: torch.Tensor       # [MB, ML, KVH, H]
     ):
-
+        
         bsz, seqlen, _ = x.shape
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)        
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
@@ -94,11 +99,11 @@ class Attention(nn.Module):
         # Manual
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
         scores = scores + mask
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq) # HMM????
+        scores = F.softmax(scores, dim=-1) # HMM????
         output = torch.matmul(scores, values)
         
         # Output
-        output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+        output = output.transpose(1, 2).view(bsz, seqlen, -1)
 
         out = self.wo(output)
         return out, cache_k, cache_v
@@ -129,9 +134,11 @@ class TransformerBlock(nn.Module):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor
     ):
-        out, cache_k, cache_v = self.attention(self.attention_norm(x), mask, freqs_cis, cache_k, cache_v)
+        x_norm = self.attention_norm(x)
+        out, cache_k, cache_v = self.attention(x_norm, mask, freqs_cis, cache_k, cache_v)
         h = x + out
-        out = h + self.feed_forward(self.ffn_norm(h))
+        h_norm = self.ffn_norm(h)
+        out = h + self.feed_forward(h_norm)
         return out, cache_k, cache_v
 
 class Transformer(nn.Module):
@@ -141,40 +148,37 @@ class Transformer(nn.Module):
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
 
-        self.tok_embeddings = nn.Embedding(
-            params.vocab_size, params.dim
-        )
+        # self.tok_embeddings = nn.Embedding(
+        #     params.vocab_size, params.dim
+        # )
 
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
             self.layers.append(TransformerBlock(layer_id, params))
 
-        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
-        self.output = nn.Linear(
-            params.dim, params.vocab_size, bias=False
-        )
+        # self.norm = RMSNorm(params.dim, eps=params.norm_eps)
+        # self.output = nn.Linear(
+        #     params.dim, params.vocab_size, bias=False
+        # )
 
     def forward(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
                 params: dict):
-        
-        # Assume the first 32 args are cache_k and the next 32 args are cache_v
-        cache_k = [params.get(f'cache_k_{i}', torch.zeros([1])) for i in range(32)]
-        cache_v = [params.get(f'cache_v_{i}', torch.zeros([1])) for i in range(32)]
 
-        x = self.tok_embeddings(x)
+        # x = self.tok_embeddings(x)
+
         cache_k_outs = []
         cache_v_outs = []
 
         for i in range(self.n_layers):
-            x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, cache_k[i], cache_v[i])
+            x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, params[f'cache_k_{i}'], params[f'cache_v_{i}'])
             cache_k_outs.append(cache_k_out_)
             cache_v_outs.append(cache_v_out_)
 
-        x = self.norm(x)
+        # x = self.norm(x)
         out = x
-        out = self.output(x).float()
+        # out = self.output(x).float()
 
         # Return the output along with the cache tensors
         return out, *cache_k_outs, *cache_v_outs
