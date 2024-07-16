@@ -1,35 +1,50 @@
-from model.config import ModelArgs
-from model.rewritten_models import RMSNorm
-from pathlib import Path
+from model.llama.config import ModelArgs
+from model.llama.rewritten_models import RMSNorm
+from base import Args, LLMBase
+
 import openvino as ov
 import torch
 import torch.nn as nn
-from typing import Optional
 import numpy as np
-import nncf
+import nncf 
+
+from typing import Optional
+from pathlib import Path
 import time
+import json
 
 # These two imports are essential to ensure that the tokenizers can be imported.
 from transformers import AutoTokenizer
 from openvino_tokenizers import convert_tokenizer
 
-class Llama:
+class Llama(LLMBase):
     def __init__(self,
-                 model_path: Path | str,
-                 model_path_2: Path | str,
+                 model_dir: Path | str,
                  device:str,
-                 args: ModelArgs,
-                 tokenizer:str="openvino_model/openvino_tokenizer.xml",
-                 detokenizer:str="openvino_model/openvino_detokenizer.xml",
                  compile:bool=True,
                  compress:bool=True,
-                 embedding:bool=True,
-                 end_layer:bool=True,
                  verbose:bool=False
                  ):
+        
         self.verbose = verbose
         self.device = device
-        self.n_layers = args.n_layers
+
+        model_dir = Path(model_dir)
+        model_path = model_dir / "model" / "1.xml"
+        model_path_2 = model_dir / "model" / "2.xml"
+        tokenizer_path = model_dir / "tokenizer" / "openvino_tokenizer.xml"
+        detokenizer_path = model_dir / "tokenizer" / "openvino_detokenizer.xml"
+        cache_dir = model_dir / "model" / "cache"
+        config_dir = model_dir / "config.json"
+
+        # Configuration loading
+        with open(config_dir, 'r') as file:
+            json_data = file.read()
+        args = json.loads(json_data)
+        self.n_layers = args["n_layers"]
+        self.n_sub_layers = args["n_sub_layers"]
+        embedding = args["outside_embedding"]
+        end_layer = args["outside_end_layer"]
 
         start = time.time()
         # OpenVINO models as the backend
@@ -37,61 +52,194 @@ class Llama:
         self.core = ov.Core()
         self.core2 = ov.Core()
         self.core3 = ov.Core()
-        self.core.set_property({"CACHE_DIR" : "npu_model/model_1_cache"})
-        self.core2.set_property({"CACHE_DIR" : "npu_model/model_2_cache"})
+        self.core.set_property({"CACHE_DIR" : cache_dir / "1"})
+        self.core2.set_property({"CACHE_DIR" : cache_dir / "2"})
         self.model = self.core.read_model(model_path)
         self.model_2 = self.core2.read_model(model_path_2)
         if compress:
             self.model = nncf.compress_weights(self.model, mode=nncf.CompressWeightsMode.INT8_ASYM)
+            self.model_2 = nncf.compress_weights(self.model_2, mode=nncf.CompressWeightsMode.INT8_ASYM)
         if compile:
             self.compile(self.device)
         self._print_if_verbose("Compiling tokenizers...")
-        self.tokenizer = self.core3.compile_model(tokenizer, "CPU")
-        self.detokenizer = self.core3.compile_model(detokenizer, "CPU")
+        self.tokenizer = self.core3.compile_model(tokenizer_path, "CPU")
+        self.detokenizer = self.core3.compile_model(detokenizer_path, "CPU")
 
         # KV-cache, mask instantiations - these are inputs
         self._print_if_verbose("Instantiating Parameters...")
         self.mask = torch.full(eval(self.model.input("mask").get_shape().to_string()), -float("inf"))
         self.inputs_1 = {}
         self.inputs_2 = {}
-        for i in range(args.n_layers):
+        for i in range(self.n_sub_layers):
             self.inputs_1["mask"] = self.mask
             self.inputs_2["mask"] = self.mask
             self.inputs_1[f"cache_k_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
             self.inputs_1[f"cache_v_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
             self.inputs_2[f"cache_k_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
             self.inputs_2[f"cache_v_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
-        
 
         # Token embeddings, if done outside the model.
         if embedding or end_layer:
-            checkpoint = torch.load(Path("Meta-Llama-3-8B") / "consolidated.00.pth")
+            checkpoint = torch.load(model_dir / "consolidated.00.pth")
 
             if embedding:
                 print("Creating and loading embedding")
-                self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
+                self.tok_embeddings = nn.Embedding(args["vocab_size"], args["dim"])
                 self.tok_embeddings.load_state_dict({'weight': checkpoint['tok_embeddings.weight']})
                 self.tok_embeddings = torch.compile(self.tok_embeddings, backend="openvino", options={"device" : "NPU"})
             
             if end_layer:
                 print("Creating and loading norm and end layer")
                 
-                self.norm = RMSNorm(args.dim, eps=args.norm_eps)
+                self.norm = RMSNorm(args["dim"], eps=args["norm_eps"])
                 self.norm.load_state_dict({'weight': checkpoint['norm.weight']})
                 self.norm = torch.compile(self.norm, backend="openvino", options={"device" : "CPU"})
-                _ = self.norm(torch.randn([1, 1, args.dim])) # Warming up the model
+                _ = self.norm(torch.randn([1, 1, args["dim"]])) # Warming up the model
                 
-                self.linear = nn.Linear(args.dim, args.vocab_size, bias=False)
+                self.linear = nn.Linear(args["dim"], args["vocab_size"], bias=False)
                 self.linear.load_state_dict({'weight': checkpoint['output.weight']})
                 self.linear = torch.compile(self.linear, backend="openvino", options={"device" : "CPU"})
-                _ = self.linear(torch.randn([1, 1, args.dim])) # Warming up the model
+                _ = self.linear(torch.randn([1, 1, args["dim"]])) # Warming up the model
 
-        self.freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads,
-                                                    args.max_seq_len * 2,
-                                                    args.rope_theta)
+        self.freqs_cis = self._precompute_freqs_cis(args["dim"] // args["n_heads"],
+                                                    args["max_seq_len"] * 2,
+                                                    args["rope_theta"])
     
         elapsed = time.time() - start
         self._print_if_verbose(f"Finished pre-processing. Elapsed time: {elapsed:.4f}")
+    
+    @classmethod
+    def from_pretrained(cls,
+                        model_dir: Path | str,
+                        max_batch_size: int,
+                        max_seq_len: int,
+                        n_sub_layers: int,
+                        export:bool = False,
+                        *args, **kwargs
+                        ) -> "Llama":
+        """
+        Generates the Llama model from source code.
+        """
+        if export:
+
+            from model.rewritten_models import Transformer
+            from model.helpers import precompute_freqs_cis_rect
+            from rename import parse_and_rename_layers
+            import re
+            ############################################
+            ###     GENERATION OF THE MAIN MODEL     ###
+            ############################################
+            def get_shape_dict(d):
+                if isinstance(d, dict):
+                    shape_dict = {}
+                    for key, value in d.items():
+                        shape_dict[key] = get_shape_dict(value)
+                    return shape_dict
+                elif isinstance(d, torch.Tensor):
+                    return d.shape
+                else:
+                    raise TypeError("Unsupported type: {}".format(type(d)))
+                    
+            model_dir = Path(model_dir)
+            config_dir = model_dir / "config.json"
+
+            with open(config_dir, 'r') as file:
+                json_data = file.read()
+            args = json.loads(json_data)
+
+            print("Model parameters:")
+            print(args)
+
+            DIM = args["dim"]
+            B = max_batch_size
+            KVH = args["n_kv_heads"]
+            NH = args["n_heads"]      
+            ML = max_seq_len
+            HD = DIM // NH
+            LAYERS = args["n_layers"]
+            SUB_LAYERS = n_sub_layers
+            L = 1 # indicates one token at a time
+
+            freqs_cis = precompute_freqs_cis_rect(
+                args["dim"] // args["n_heads"],
+                args["max_seq_len"] * 2,
+                args["rope_theta"]
+            )
+
+            example_input = {
+                "x"         : torch.randint(0, args["vocab_size"], [B, L]),
+                "mask"      : torch.full([B, NH, L, ML], float('-inf')),
+                "freqs_cis" : freqs_cis[0:L],
+                "params"    : {}
+            }
+
+            if args["outside_embedding"]:
+                example_input["x"] = torch.randn([B, L, DIM])
+
+            print("Loading checkpoint...")
+            checkpoint = torch.load(model_dir / "consolidated.00.pth")
+            count = 1
+            for offset in range(0, LAYERS, SUB_LAYERS):
+                # Configuring input shapes
+                example_input["params"] = {}
+                
+                for i in range(SUB_LAYERS):
+                    example_input["params"][f"cache_k_{i}"] = torch.zeros([B, ML, KVH, HD])
+                for i in range(SUB_LAYERS):
+                    example_input["params"][f"cache_v_{i}"] = torch.zeros([B, ML, KVH, HD])
+                
+                input_shapes = get_shape_dict(example_input)
+                
+                for key in input_shapes["params"]:
+                    input_shapes[key] = input_shapes["params"][key]
+                input_shapes.pop("params")
+
+                print(f"Creating model chunk, layers {offset}-{offset+SUB_LAYERS-1}...")
+                model = Transformer(params=Args(args))
+                model.load_state_dict(checkpoint, strict=False)
+
+                del model.layers[offset + SUB_LAYERS:] # Removing layers
+                del model.layers[:offset]
+                model.n_layers = SUB_LAYERS
+
+                ov_model = ov.convert_model(model, example_input=example_input)
+                ov_model.reshape(input_shapes)
+                
+                if offset != 0: # Rename layers if offset
+                    for node in ov_model.get_ops():
+                        name = node.get_friendly_name()
+                        operation = node.get_type_name()
+                        if operation == 'Parameter' and name.startswith("cache"):
+                            new_name = re.sub(r'_(\d+)$', lambda x: f"_{int(x.group(1)) + offset}", name)
+                            node.set_friendly_name(new_name)
+                        else:
+                            new_name = re.sub(r'layers\.(\d+)', lambda x: f"layers.{int(x.group(1)) + offset}", name)
+                            node.set_friendly_name(new_name)
+                
+                ov.save_model(ov_model, model_dir / "model" / f"{count}.xml")
+
+                # Rewriting inputs and output names for the cache to be more friendly
+                parse_and_rename_layers(model_dir / "model" / f"{count}.xml")
+                del model
+                del ov_model
+                count += 1
+
+            #######################################
+            ###            TOKENIZER            ###
+            #######################################
+
+            import openvino_tokenizers as ot
+
+            print("Generating tokenizers...")
+            hf_tokenizer = AutoTokenizer.from_pretrained(args["model"])
+            ov_tokenizer, ov_detokenizer = ot.convert_tokenizer(hf_tokenizer, with_detokenizer=True, skip_special_tokens=True)
+            ov.save_model(ov_tokenizer, model_dir / "tokenizer" / "openvino_tokenizer.xml")
+            ov.save_model(ov_detokenizer, model_dir / "tokenizer" / "openvino_detokenizer.xml")
+        
+        return Llama(model_dir, **kwargs)
+
+
+
 
     def _warm_up(self):
         self._print_if_verbose(f"Warming up model 1 to {self.device}...")
@@ -173,11 +321,11 @@ class Llama:
             output_2 = self.model_2(self.inputs_2)
             
             # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
-            for j in range(0, self.n_layers):
+            for j in range(0, self.n_sub_layers):
                 self.inputs_1[f"cache_k_{j}"] = output_1[f"cache_k_{j}_out"]
                 self.inputs_1[f"cache_v_{j}"] = output_1[f"cache_v_{j}_out"]
-                self.inputs_2[f"cache_k_{j}"] = output_2[f"cache_k_{j+16}_out"]
-                self.inputs_2[f"cache_v_{j}"] = output_2[f"cache_v_{j+16}_out"]
+                self.inputs_2[f"cache_k_{j}"] = output_2[f"cache_k_{j+self.n_sub_layers}_out"]
+                self.inputs_2[f"cache_v_{j}"] = output_2[f"cache_v_{j+self.n_sub_layers}_out"]
             
             elapsed = time.time() - start
             average_time = (average_time * (i) + elapsed) / (i + 1)
@@ -221,11 +369,11 @@ class Llama:
             output_2 = self.model_2(self.inputs_2)
             
             # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
-            for j in range(0, self.n_layers):
+            for j in range(0, self.n_sub_layers):
                 self.inputs_1[f"cache_k_{j}"] = output_1[f"cache_k_{j}_out"]
                 self.inputs_1[f"cache_v_{j}"] = output_1[f"cache_v_{j}_out"]
-                self.inputs_2[f"cache_k_{j}"] = output_2[f"cache_k_{j+16}_out"]
-                self.inputs_2[f"cache_v_{j}"] = output_2[f"cache_v_{j+16}_out"]
+                self.inputs_2[f"cache_k_{j}"] = output_2[f"cache_k_{j+self.n_sub_layers}_out"]
+                self.inputs_2[f"cache_v_{j}"] = output_2[f"cache_v_{j+self.n_sub_layers}_out"]
 
             # Logits
             logits = output_2[0]
@@ -291,14 +439,14 @@ class Llama:
 
 if __name__ == "__main__":
 
-    llama = Llama(model_path="npu_model/llama_1.xml",
-                  model_path_2="npu_model/llama_2.xml",
-                  device="NPU",
-                  args=ModelArgs(n_layers=16, max_batch_size=1, max_seq_len=128),
-                  compile=True,
-                  compress=False,
-                  embedding=True,
-                  end_layer=True,
-                  verbose=True)
+    llama = Llama.from_pretrained(model_dir="npu_model", max_batch_size=1,
+                                  max_seq_len=128, n_sub_layers=16, export=False,
+                                  device="NPU",
+                                  compile=True,
+                                  compress=False,
+                                  verbose=True)
 
-    print(llama.generate(["What is going on with the weather? "], max_new_tokens=30))
+    output = llama.generate(prompt=["What is the meaning of"],
+                            max_new_tokens=30)
+
+    print(output)

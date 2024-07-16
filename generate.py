@@ -1,7 +1,7 @@
-from model.rewritten_models import Transformer
-from model.config import ModelArgs
+from model.llama.rewritten_models import Transformer
+from model.llama.config import ModelArgs
 import torch
-from model.helpers import precompute_freqs_cis_rect
+from model.llama.helpers import precompute_freqs_cis_rect
 from pathlib import Path
 import re
 
@@ -93,7 +93,6 @@ for offset in range(0, args.n_layers, args.n_sub_layers):
     missing = model.load_state_dict(checkpoint, strict=False)
 
     print(model)
-    # print(missing)
     print()
     print(model.layers[offset + args.n_sub_layers:])
     print(model.layers[:offset])

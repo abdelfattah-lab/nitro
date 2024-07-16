@@ -2,8 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import math
-from model.helpers import repeat_kv, apply_rotary_emb_rectangular
-from model.config import ModelArgs
+from model.llama.helpers import repeat_kv, apply_rotary_emb_rectangular
+from model.llama.config import ModelArgs
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):

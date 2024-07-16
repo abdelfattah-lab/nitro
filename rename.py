@@ -1,6 +1,4 @@
 import xml.etree.ElementTree as ET
-from xml.dom import minidom
-
 import shutil
 import os
 
@@ -36,15 +34,15 @@ def parse_and_rename_layers(file, output_file=None):
                             from_layer = root.find(f".//layer[@id='{from_layer_id}']")
                             if from_layer is not None:
                                 from_layer_name = from_layer.get('name')
-                                module_index = from_layer_name.split('.')[2].split('/')[0]
+                                module_index = int(from_layer_name.split('.')[2].split('/')[0])
                                 output_ports = from_layer.findall('.//output/port')
                                 for port in output_ports:
                                     port_name = port.get('names')
                                     if port_name is not None:
                                         if port_name.startswith('cache_v'):
-                                            new_name = f'cache_v_{module_index}_out'
+                                            new_name = f'cache_v_{int(module_index)}_out'
                                         elif port_name.startswith('cache_k'):
-                                            new_name = f'cache_k_{module_index}_out'
+                                            new_name = f'cache_k_{int(module_index)}_out'
                                         else:
                                             continue
                                         layer.set('name', new_name)

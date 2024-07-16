@@ -1,7 +1,7 @@
 import torch
-from model.helpers import apply_rotary_emb_rectangular, apply_rotary_emb, \
+from model.llama.helpers import apply_rotary_emb_rectangular, apply_rotary_emb, \
                     precompute_freqs_cis, precompute_freqs_cis_rect
-from model.rewritten_models import ModelArgs
+from model.llama.rewritten_models import ModelArgs
 
 args = ModelArgs()
 
