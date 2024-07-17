@@ -9,6 +9,7 @@ models/
 model_cache/
 *.svg
 *.dot
+*.pth
 
 build/
 .trash/

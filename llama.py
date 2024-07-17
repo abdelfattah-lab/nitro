@@ -1,4 +1,3 @@
-from model.llama.config import ModelArgs
 from model.llama.rewritten_models import RMSNorm
 from base import Args, LLMBase
 
@@ -16,6 +15,26 @@ import json
 # These two imports are essential to ensure that the tokenizers can be imported.
 from transformers import AutoTokenizer
 from openvino_tokenizers import convert_tokenizer
+
+class LlamaConfig:
+    def __init__(self):
+        self.model = "meta-llama/Meta-Llama-3-8B"
+
+        self.dim = 4096
+        self.n_layers = 32
+        self.n_heads = 32
+        self.n_kv_heads = 8
+        self.vocab_size = 128256
+        self.multiple_of = 1024
+        self.ffn_dim_multiplier = 1.3
+        self.norm_eps = 5e-5
+        self.rope_theta = 500000
+        self.max_batch_size = 1
+        self.max_seq_len = 128
+
+        self.outside_embedding = True
+        self.outside_end_layer = True
+        self.n_sub_layers = 16
 
 class Llama(LLMBase):
     def __init__(self,
@@ -121,11 +140,11 @@ class Llama(LLMBase):
         Generates the Llama model from source code.
         """
         if export:
-
-            from model.rewritten_models import Transformer
-            from model.helpers import precompute_freqs_cis_rect
+            from model.llama.rewritten_models import Transformer
+            from model.llama.helpers import precompute_freqs_cis_rect
             from rename import parse_and_rename_layers
             import re
+
             ############################################
             ###     GENERATION OF THE MAIN MODEL     ###
             ############################################
@@ -237,8 +256,6 @@ class Llama(LLMBase):
             ov.save_model(ov_detokenizer, model_dir / "tokenizer" / "openvino_detokenizer.xml")
         
         return Llama(model_dir, **kwargs)
-
-
 
 
     def _warm_up(self):
@@ -388,12 +405,6 @@ class Llama(LLMBase):
             self._print_if_verbose(">>", elapsed)
         self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
         return tokens
-
-
-    def _print_if_verbose(self, *text) -> None:
-        if self.verbose:
-            print(*text)
-
 
     def _update_mask(self, step:int) -> None:
         """
