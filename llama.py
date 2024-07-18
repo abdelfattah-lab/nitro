@@ -89,13 +89,9 @@ class Llama(LLMBase):
         self.mask = torch.full(eval(self.model.input("mask").get_shape().to_string()), -float("inf"))
         self.inputs_1 = {}
         self.inputs_2 = {}
-        for i in range(self.n_sub_layers):
+        for _ in range(self.n_sub_layers):
             self.inputs_1["mask"] = self.mask
             self.inputs_2["mask"] = self.mask
-            self.inputs_1[f"cache_k_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
-            self.inputs_1[f"cache_v_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
-            self.inputs_2[f"cache_k_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
-            self.inputs_2[f"cache_v_{i}"] = np.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
 
         # Token embeddings, if done outside the model.
         if embedding or end_layer:
@@ -142,7 +138,7 @@ class Llama(LLMBase):
         if export:
             from model.llama.rewritten_models import Transformer
             from model.llama.helpers import precompute_freqs_cis_rect
-            from rename import parse_and_rename_layers
+            from modifiers import parse_and_rename_layers, make_stateful
             import re
 
             ############################################
@@ -214,7 +210,7 @@ class Llama(LLMBase):
                 input_shapes.pop("params")
 
                 print(f"Creating model chunk, layers {offset}-{offset+SUB_LAYERS-1}...")
-                model = Transformer(params=Args(args))
+                model = Transformer(params=Args(args), offset=offset)
                 model.load_state_dict(checkpoint, strict=False)
 
                 del model.layers[offset + SUB_LAYERS:] # Removing layers
@@ -235,13 +231,20 @@ class Llama(LLMBase):
                             new_name = re.sub(r'layers\.(\d+)', lambda x: f"layers.{int(x.group(1)) + offset}", name)
                             node.set_friendly_name(new_name)
                 
-                ov.save_model(ov_model, model_dir / "model" / f"{count}.xml")
+                model_path = model_dir / "model" / f"{count}.xml"
 
                 # Rewriting inputs and output names for the cache to be more friendly
-                parse_and_rename_layers(model_dir / "model" / f"{count}.xml")
+                # TODO: RESOLVING THE INPUTS IS DOABLE.
+                ov_model = parse_and_rename_layers(ov_model, offset)
+
+                # Converting to stateful model
+                ov_model = make_stateful(ov_model)
+
+                ov.save_model(ov_model, model_path)
                 del model
                 del ov_model
                 count += 1
+
 
             #######################################
             ###            TOKENIZER            ###
@@ -335,14 +338,7 @@ class Llama(LLMBase):
             self.inputs_2["x"] = output_1[0]
             self.inputs_2["freqs_cis"] = self.freqs_cis[i:i+1]
 
-            output_2 = self.model_2(self.inputs_2)
-            
-            # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
-            for j in range(0, self.n_sub_layers):
-                self.inputs_1[f"cache_k_{j}"] = output_1[f"cache_k_{j}_out"]
-                self.inputs_1[f"cache_v_{j}"] = output_1[f"cache_v_{j}_out"]
-                self.inputs_2[f"cache_k_{j}"] = output_2[f"cache_k_{j+self.n_sub_layers}_out"]
-                self.inputs_2[f"cache_v_{j}"] = output_2[f"cache_v_{j+self.n_sub_layers}_out"]
+            _ = self.model_2(self.inputs_2)
             
             elapsed = time.time() - start
             average_time = (average_time * (i) + elapsed) / (i + 1)
@@ -384,13 +380,6 @@ class Llama(LLMBase):
             self.inputs_2["freqs_cis"] = self.freqs_cis[i:i+1]
 
             output_2 = self.model_2(self.inputs_2)
-            
-            # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
-            for j in range(0, self.n_sub_layers):
-                self.inputs_1[f"cache_k_{j}"] = output_1[f"cache_k_{j}_out"]
-                self.inputs_1[f"cache_v_{j}"] = output_1[f"cache_v_{j}_out"]
-                self.inputs_2[f"cache_k_{j}"] = output_2[f"cache_k_{j+self.n_sub_layers}_out"]
-                self.inputs_2[f"cache_v_{j}"] = output_2[f"cache_v_{j+self.n_sub_layers}_out"]
 
             # Logits
             logits = output_2[0]

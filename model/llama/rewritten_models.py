@@ -142,11 +142,12 @@ class TransformerBlock(nn.Module):
         return out, cache_k, cache_v
 
 class Transformer(nn.Module):
-    def __init__(self, params: ModelArgs):
+    def __init__(self, params: ModelArgs, offset:int):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
+        self.offset = offset
 
         # self.tok_embeddings = nn.Embedding(
         #     params.vocab_size, params.dim
@@ -180,5 +181,12 @@ class Transformer(nn.Module):
         out = x
         # out = self.output(x).float()
 
+        # Preparing the outputs
+        outputs = {"logit" : out}
+        for i in range(self.n_layers):
+            outputs[f"cache_k_{i + self.offset}_out"] = cache_k_outs[i]
+        for i in range(self.n_layers):
+            outputs[f"cache_v_{i + self.offset}_out"] = cache_v_outs[i]
+
         # Return the output along with the cache tensors
-        return out, *cache_k_outs, *cache_v_outs
+        return outputs
