@@ -142,51 +142,87 @@ class TransformerBlock(nn.Module):
         return out, cache_k, cache_v
 
 class Transformer(nn.Module):
-    def __init__(self, params: ModelArgs, offset:int):
+    def __init__(self, params: ModelArgs, offset:int=0, chunk_size:int=-1):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
-        self.offset = offset
 
-        # self.tok_embeddings = nn.Embedding(
-        #     params.vocab_size, params.dim
-        # )
+        # Including statuses
+        self.include_embedding = False
+        self.include_transformer = False
+        self.include_output = False
+
+        # Parameters
+        self.offset = offset
+        self.chunk_size = chunk_size
+        if self.chunk_size == -1:
+            self.chunk_size = self.n_layers
+
+
+        self.tok_embeddings = nn.Embedding(
+            params.vocab_size, params.dim
+        )
 
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
             self.layers.append(TransformerBlock(layer_id, params))
 
-        # self.norm = RMSNorm(params.dim, eps=params.norm_eps)
-        # self.output = nn.Linear(
-        #     params.dim, params.vocab_size, bias=False
-        # )
+        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.output = nn.Linear(
+            params.dim, params.vocab_size, bias=False
+        )
 
     def forward(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
                 params: dict):
 
-        # x = self.tok_embeddings(x)
+        if self.include_embedding:
+            x = self.embedding(x, mask, freqs_cis, params)
+        
+        if self.include_transformer:
+            x, cache_k_outs, cache_v_outs = self.transformer_chunk(x, mask, freqs_cis, params)
+        
+        if self.include_output:
+            x = self.output_chunk(x, mask, freqs_cis, params)
 
+        out = x
+
+        # Preparing the outputs for appropriate naming
+        outputs = {"logit" if self.include_output else "x" : out}
+        if self.include_transformer:
+            for i in range(self.chunk_size):
+                outputs[f"cache_k_{i + self.offset}_out"] = cache_k_outs[i]
+                outputs[f"cache_v_{i + self.offset}_out"] = cache_v_outs[i]
+
+        # Return the output along with the cache tensors
+        return outputs
+
+    def embedding(self, x: torch.Tensor,
+                mask: torch.Tensor,
+                freqs_cis: torch.Tensor,
+                params: dict):
+        
+        return self.tok_embeddings(x)
+    
+    def transformer_chunk(self, x: torch.Tensor,
+                mask: torch.Tensor,
+                freqs_cis: torch.Tensor,
+                params: dict):
+        
         cache_k_outs = []
         cache_v_outs = []
-
-        for i in range(self.n_layers):
+        for i in range(self.offset, self.offset + self.chunk_size):    
             x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, params[f'cache_k_{i}'], params[f'cache_v_{i}'])
             cache_k_outs.append(cache_k_out_)
             cache_v_outs.append(cache_v_out_)
 
-        # x = self.norm(x)
-        out = x
-        # out = self.output(x).float()
-
-        # Preparing the outputs
-        outputs = {"logit" : out}
-        for i in range(self.n_layers):
-            outputs[f"cache_k_{i + self.offset}_out"] = cache_k_outs[i]
-        for i in range(self.n_layers):
-            outputs[f"cache_v_{i + self.offset}_out"] = cache_v_outs[i]
-
-        # Return the output along with the cache tensors
-        return outputs
+        return x, cache_k_outs, cache_v_outs
+    
+    def output_chunk(self, x: torch.Tensor,
+                mask: torch.Tensor,
+                freqs_cis: torch.Tensor,
+                params: dict):
+        
+        return self.output(self.norm(x))
