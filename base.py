@@ -5,24 +5,12 @@ from typing import List
 import re
 import torch
 import time
-
-class Args:
-    """
-    Converts JSON file into a class with attributes, with each key being an
-    attribute.
-    """
-    def __init__(self, args):
-        for key, value in args.items():
-            setattr(self, key, value)
+import numpy as np
+from typing import Optional
 
 class OVWrapper:
     """
-    Base wrapper for the OpenVINO model. Abstracts and simplifies the chunks to
-    the following:
-
-    - inputs
-    - internal output : output to be fed into the next layer.
-    - output caches : true outputs of the entire model.
+    Base wrapper for the OpenVINO model. Abstracts and simplifies the chunk inferences
     """
 
     def __init__(self,
@@ -122,11 +110,12 @@ class OVWrapper:
         inputs.update(parallel_inputs)
         inputs.update(series_inputs)
 
-        # TODO: Make this a generic thing.
+        # TODO: Make this a generic algorithm. Maybe
         for model in self.models:
             outputs = model(inputs)
-            if "x" in outputs:
-                inputs["x"] = outputs["x"]
+            for key in series_inputs:
+                if key in outputs:
+                    inputs[key] = outputs[key]
                 
         return outputs["logit"]
 
@@ -139,19 +128,29 @@ class LLMBase:
     Base model for LLM deplyoment.
     """
     
-    def __init__(self,
-                 model_dir: Path | str,
+    def __init__(self, model_dir: Path | str,
+                 args,
+                 count:int,
                  device:str,
                  compile:bool=True,
                  compress:bool=True,
-                 verbose:bool=True):
+                 verbose:bool=False):
         self.verbose = verbose
         self.device = device
+
         model_dir = Path(model_dir)
         llm_dir = model_dir / "model"
+        token_dir = model_dir / "tokenizer"
 
-        self.model = OVWrapper(llm_dir, self.device, 2,
+        self.model = OVWrapper(llm_dir, self.device, count,
                                verbose=verbose, warm_up=True, compile=compile)
+        
+        core = ov.Core()
+        self.tokenizer = core.compile_model(token_dir / "openvino_tokenizer.xml", "CPU")
+        self.detokenizer = core.compile_model(token_dir / "openvino_detokenizer.xml", "CPU")
+
+        self.parallel_inputs = {}
+        self.series_inputs = {}
 
     def _print_if_verbose(self, *text) -> None:
         if self.verbose:
@@ -167,12 +166,84 @@ class LLMBase:
         """
         raise NotImplementedError("Not implemented - must be specified in sub-classes.")
 
-    def _iterate(self, token:int) -> torch.Tensor:
+    def _iterate(self, token:int, step:int) -> torch.Tensor:
         """
-        Performs one iteration of the LLM: Inputs a token, returns the logits.
+        Performs one iteration of the LLM: Inputs a token, returns the logits. This
+        acts as the middle-ware translation layer.
         """
         raise NotImplementedError("Not implemented - must be specified in sub-classes.")
-        
+
+    def _prefill(self, tokens:list[int]) -> None:
+        """
+        Prefill stage.
+        """
+        average_time = 0
+        for i, token in enumerate(tokens):
+            start = time.time()
+
+            _ = self._iterate(token, i)
+            
+            elapsed = time.time() - start
+            average_time = (average_time * (i) + elapsed) / (i + 1)
+
+            self._print_if_verbose(">>", elapsed)
+        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
+            
+    def _decode(self, tokens:list[int], first_token:torch.Tensor, max_new_tokens:int) -> list[int]:
+        """
+        Prefill stage.
+        """
+        token = first_token
+        start_idx = len(tokens)
+
+        average_time = 0
+        for i in range(start_idx, start_idx+max_new_tokens):
+            start = time.time()
+            
+            tokens.append(token)
+            output = self._iterate(token, i)
+            token = np.argmax(output.squeeze()) # TODO: ADD OPTION FOR VARIATION
+
+            elapsed = time.time() - start
+            average_time = (average_time * (i - start_idx) + elapsed) / (i - start_idx + 1)
+            self._print_if_verbose(">>", elapsed)
+        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
+
+        tokens.append(token)
+        return tokens
+    
+    def _generate_tokens(self, prompt) -> str:
+        """
+        Converts the list of prompts into a Python list of tokens.
+        """
+        return list(self.tokenizer(prompt)["input_ids"].squeeze())
+
+    def generate(self,
+                 prompt: list[str],
+                 max_new_tokens: Optional[int]
+                 ) -> list[str]:
+        """
+        Runs inference for text generation.
+
+        Parameters:
+        prompt (list[str])      : input string prompt.
+        max_new_tokens (int)    : number of new tokens to generate.
+
+        Returns:
+        tokens (list[str])      : completed text, new tokens with original prompt.
+        """
+        tokens = self._generate_tokens(prompt)
+        next_token = tokens.pop()
+
+        # Prefill
+        self._prefill(tokens)
+
+        # Generate
+        tokens = self._decode(tokens, next_token, max_new_tokens)
+
+        # Detokenizer
+        outputs = self.detokenizer(np.array(tokens).reshape(1, -1))
+        return outputs["string_output"]
 
 if __name__ == "__main__":
     _ = LLMBase("npu_model", "NPU")

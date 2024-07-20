@@ -99,7 +99,7 @@ class Attention(nn.Module):
         # Manual
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
         scores = scores + mask
-        scores = F.softmax(scores, dim=-1) # HMM????
+        scores = F.softmax(scores, dim=-1)
         output = torch.matmul(scores, values)
         
         # Output

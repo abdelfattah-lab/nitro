@@ -1,67 +1,35 @@
-from model.llama.rewritten_models import RMSNorm
-from base import Args, LLMBase, OVWrapper
+from base import LLMBase
+from model.llama.rewritten_models import Transformer
+from model.llama.config import ModelArgs
+from model.llama.helpers import precompute_freqs_cis_rect
 
 import openvino as ov
 import torch
-import torch.nn as nn
-import numpy as np
-import nncf 
 import os
-
-from typing import Optional
+import shutil
 from pathlib import Path
-import time
-import json
+
 
 # These two imports are essential to ensure that the tokenizers can be imported.
 from transformers import AutoTokenizer
 from openvino_tokenizers import convert_tokenizer
-
-from model.llama.rewritten_models import Transformer
-from model.llama.helpers import precompute_freqs_cis_rect
 from modifiers import parse_and_rename_layers, make_stateful, conversion_wrapper, get_shape_dict
 import re
-                
-class LlamaConfig:
-    def __init__(self):
-
-        self.model = "meta-llama/Meta-Llama-3-8B"
-
-        self.dim = 4096
-        self.n_layers = 32
-        self.n_heads = 32
-        self.n_kv_heads = 8
-        self.vocab_size = 128256
-        self.multiple_of = 1024
-        self.ffn_dim_multiplier = 1.3
-        self.norm_eps = 5e-5
-        self.rope_theta = 500000
-        self.max_batch_size = 1
-        self.max_seq_len = 128
-
-        self.chunk_size = 16
 
 class Llama(LLMBase):
-    def __init__(self, model_dir: Path | str, args:LlamaConfig, count:int, device:str, compile:bool=True, compress:bool=True, verbose:bool=False):
-        # TODO
-        self.verbose = verbose
-        self.device = device
-
-        model_dir = Path(model_dir)
-        llm_dir = model_dir / "model"
-        token_dir = model_dir / "tokenizer"
-
-        self.args = args
-        self.model = OVWrapper(llm_dir, device,
-                               num_chunks=count, verbose=verbose, warm_up=False, compile=compile)
-    
+    def __init__(self, model_dir: Path | str,
+                 args:ModelArgs,
+                 count:int,
+                 device:str,
+                 compile:bool=True,
+                 compress:bool=True,
+                 verbose:bool=False):
+        
+        super().__init__(model_dir, args, count, device, compile, compress, verbose)
         # Custom inputs
-        self.freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads, args.max_seq_len * 2, args.rope_theta)
+        self._freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads, args.max_seq_len * 2, args.rope_theta)
+        self.freqs_cis = self._freqs_cis[0:1]
         self.mask = torch.full([args.max_batch_size, args.n_heads, 1, args.max_seq_len], float('-inf'))
-
-        core = ov.Core()
-        self.tokenizer = core.compile_model(token_dir / "openvino_tokenizer.xml", "CPU")
-        self.detokenizer = core.compile_model(token_dir / "openvino_detokenizer.xml", "CPU")
     
     @classmethod
     def from_pretrained(cls,
@@ -76,7 +44,7 @@ class Llama(LLMBase):
         Generates the Llama model from source code.
         """
 
-        args = LlamaConfig()
+        args = ModelArgs()
         args.chunk_size = chunk_size
         args.max_seq_len = max_seq_len
         args.max_batch_size = max_batch_size
@@ -88,6 +56,19 @@ class Llama(LLMBase):
             ############################################
             ###     GENERATION OF THE MAIN MODEL     ###
             ############################################
+
+            print("Clearing directory", llm_dir)
+            if os.path.exists(llm_dir) and os.path.isdir(llm_dir):
+                # Iterate over all files and subdirectories in the directory
+                for filename in os.listdir(llm_dir):
+                    file_path = os.path.join(llm_dir, filename)
+                    try:
+                        if os.path.isfile(file_path) or os.path.islink(file_path):
+                            os.unlink(file_path)  # Remove the file or link
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)  # Remove the subdirectory
+                    except Exception as e:
+                        print(f'Failed to delete {file_path}. Reason: {e}')
 
             checkpoint = torch.load(model_dir / "consolidated.00.pth")
             print("Creating PyTorch model...")
@@ -121,13 +102,13 @@ class Llama(LLMBase):
                 input_shapes[key] = input_shapes["params"][key]
             input_shapes.pop("params")
 
-            #### Chunking embedding layer ####
+            ############ Chunking embedding layer ############
             print("Converting embedding layer...")
             model.include_embedding, model.include_transformer, model.include_output = True, False, False
             conversion_wrapper(model, count, llm_dir, example_input, input_shapes)
             count += 1
 
-            #### Chunking transformer layers ####
+            ############ Chunking transformer layers ############
             print("Converting transformer layers...")
             model.include_embedding, model.include_transformer, model.include_output = False, True, False
 
@@ -138,13 +119,12 @@ class Llama(LLMBase):
                 conversion_wrapper(model, count, llm_dir, example_input, input_shapes)
                 count += 1
 
-            #### Chunking output layer ####
+            ############ Chunking output layer ############
             model.include_embedding, model.include_transformer, model.include_output = False, False, True
             print("Converting output layer...")
 
             conversion_wrapper(model, count, llm_dir, example_input, input_shapes)
             count += 1
-
 
             #######################################
             ###            TOKENIZER            ###
@@ -158,6 +138,8 @@ class Llama(LLMBase):
             ov.save_model(ov_tokenizer, model_dir / "tokenizer" / "openvino_tokenizer.xml")
             ov.save_model(ov_detokenizer, model_dir / "tokenizer" / "openvino_detokenizer.xml")
         
+            del model
+
         else:
             count = 0
             pattern = re.compile(r'^(\d+)\.xml$')
@@ -169,6 +151,7 @@ class Llama(LLMBase):
                         count = number
             count += 1
             print(count)
+
         return Llama(model_dir, args, count, **kwargs)
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
@@ -182,72 +165,19 @@ class Llama(LLMBase):
         freqs_cis = torch.view_as_real(freqs_cis)
         return freqs_cis
 
-    def _iterate(self, parallel_inputs, series_inputs) -> torch.Tensor:
+    def _iterate(self, token:int, step:int) -> torch.Tensor:
         """
         Performs one iteration of the LLM: Inputs a token, returns the logits.
         """
+        self._update_freqs_cis(step)
+        self._update_mask(step)
         
-        
-        output = self.model(parallel_inputs, series_inputs)
+        self.parallel_inputs["freqs_cis"] = self.freqs_cis
+        self.parallel_inputs["mask"] = self.mask
+        self.series_inputs["x"] = token
+
+        output = self.model(self.parallel_inputs, self.series_inputs)
         return output
-
-    def _prefill(self, tokens:list[int]) -> None:
-        """
-        Prefill stage.
-        """
-
-        series_inputs = {}
-        parallel_inputs = {"freqs_cis" : self.freqs_cis,
-                           "mask" : self.mask}
-        
-        average_time = 0
-        for i, token in enumerate(tokens):
-            start = time.time()
-
-            # Updating inputs
-            series_inputs["x"] = token
-            self._update_mask(i)
-            parallel_inputs["freqs_cis"] = self.freqs_cis[i:i+1]
-
-            _ = self._iterate(series_inputs, parallel_inputs)
-            
-            elapsed = time.time() - start
-            average_time = (average_time * (i) + elapsed) / (i + 1)
-
-            self._print_if_verbose(">>", elapsed)
-        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
-            
-    def _decode(self, tokens:list[int], first_token:torch.Tensor, max_new_tokens:int) -> list[int]:
-        """
-        Prefill stage.
-        """
-        token = first_token
-        start_idx = len(tokens)
-
-        series_inputs = {}
-        parallel_inputs = {"freqs_cis" : self.freqs_cis,
-                           "mask" : self.mask}
-        
-        average_time = 0
-        for i in range(start_idx, start_idx+max_new_tokens):
-            start = time.time()
-            # Updating parallel inputs
-            tokens.append(token)
-            series_inputs["x"] = token
-            self._update_mask(i)
-            parallel_inputs["freqs_cis"] = self.freqs_cis[i:i+1]
-
-            output = self._iterate(series_inputs, parallel_inputs)
-
-            token = np.argmax(output.squeeze()) # TODO: ADD OPTION FOR VARIATION
-
-            elapsed = time.time() - start
-            average_time = (average_time * (i - start_idx) + elapsed) / (i - start_idx + 1)
-            self._print_if_verbose(">>", elapsed)
-        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
-
-        tokens.append(token)
-        return tokens
     
 
     def _update_mask(self, step:int) -> None:
@@ -256,45 +186,13 @@ class Llama(LLMBase):
         """
         self.mask[:,:,:,-1-step:] = 0.0
 
-    def _generate_tokens(self, prompt) -> str:
-        """
-        Converts the list of prompts into a Python list of tokens.
-        """
-        return list(self.tokenizer(prompt)["input_ids"].squeeze())
-
-    def generate(self,
-                 prompt: list[str],
-                 max_new_tokens: Optional[int]
-                 ) -> list[str]:
-        """
-        Runs inference for text generation.
-
-        Parameters:
-        prompt (list[str])      : input string prompt.
-        max_new_tokens (int)    : number of new tokens to generate.
-
-        Returns:
-        tokens (list[str])      : completed text, new tokens with original prompt.
-        """
-        tokens = self._generate_tokens(prompt)
-        next_token = tokens.pop()
-
-        # Prefill
-        self._prefill(tokens)
-
-        # Generate
-        tokens = self._decode(tokens, next_token, max_new_tokens)
-
-        # Detokenizer
-        outputs = self.detokenizer(np.array(tokens).reshape(1, -1))
-        return outputs["string_output"]
-
-
+    def _update_freqs_cis(self, step:int) -> None:
+        self.freqs_cis = self._freqs_cis[step:step+1]
 
 if __name__ == "__main__":
 
     llama = Llama.from_pretrained(model_dir="npu_model", max_batch_size=1,
-                                  max_seq_len=128, chunk_size=16, export=False,
+                                  max_seq_len=128, chunk_size=32, export=False,
                                   device="NPU",
                                   compile=True,
                                   compress=False,

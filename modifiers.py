@@ -4,12 +4,10 @@ import os
 import numpy as np
 from typing import Any
 
-import sys
 import re
 import openvino as ov
 from openvino.runtime import Model
 from openvino.runtime.passes import Manager, MakeStateful
-from pathlib import Path
 import torch
 
 def get_shape_dict(d):
@@ -168,18 +166,6 @@ import numpy as np
 
 def make_stateful(model:  Model):
 
-    def print_parameters(model: Model):
-        parameters = model.get_parameters()
-        print("Model Parameters:")
-        for param in parameters:
-            print(f"  {param.get_friendly_name()} : {param.get_shape()}")
-
-    def print_results(model: Model):
-        results = model.get_results()
-        print("Model Results:")
-        for result in results:
-            print(f"  {result.get_friendly_name()} : {result.shape}")
-
     # Get the parameters and results of the model
     parameters = model.get_parameters()
     results = model.get_results()
@@ -233,12 +219,7 @@ def make_stateful(model:  Model):
     manager.register_pass(MakeStateful(pairs))
     manager.run_passes(model)
 
-    # print("After Pass Execution:")
-    # print_parameters(model)
-    # print_results(model)
-
-    # Re-introduce the input parameter
-
+    # MakeStateful does not provide the (optional) input parameter
     constant = None
     for node in model.get_ops():
         if node.get_type_name() == "ReadValue":
