@@ -1,13 +1,14 @@
-from base import LLMBase
-from model.llama.rewritten_models import Transformer
-from model.llama.config import ModelArgs
-from model.llama.helpers import precompute_freqs_cis_rect
+from base import LLMBase, OVWrapper
+from pytorch_model import Llama
+from pytorch_model.llama.config import ModelArgs
+from pytorch_model.helpers import precompute_freqs_cis_rect
 
 import openvino as ov
 import torch
 import os
 import shutil
 from pathlib import Path
+import numpy as np
 
 
 # These two imports are essential to ensure that the tokenizers can be imported.
@@ -16,6 +17,45 @@ from openvino_tokenizers import convert_tokenizer
 from modifiers import parse_and_rename_layers, make_stateful, conversion_wrapper, get_shape_dict
 import re
 
+class LlamaWrapper(OVWrapper):
+    def __init__(self,
+                 llm_dir: Path | str,
+                 device: str,
+                 num_chunks:int,
+                 verbose:bool,
+                 warm_up:bool = True,
+                 compile:bool = True):
+        super().__init__(llm_dir, device, num_chunks, verbose, warm_up, compile)
+
+    def setup_transitions(self):
+        # Connections
+        # TODO: INCOMPLETE
+        self._print_if_verbose("Setting up transitions...")
+        for i in range(1, len(self.requests)):
+            req_1 = self.requests[i-1]
+            req_2 = self.requests[i]
+
+            # Cascading [x] connections
+            output = req_1.get_output_tensor(0)
+            req_2.set_tensor('x', output)
+    
+    def __call__(self,
+                 parallel_inputs:dict[str, torch.Tensor],
+                 series_inputs:dict[str, torch.Tensor]
+                 ) -> dict[str, torch.Tensor]:
+        # TODO: CONVERT FROM SYNCHRONOUS TO ASYNCHRONOUS.
+        # Some modifications
+        inputs = {}
+        inputs.update(parallel_inputs)
+        inputs.update(series_inputs)
+        for i, model in enumerate(self.models):
+            output = model(inputs)
+            if "x" in output:
+                inputs["x"] = output["x"]
+        return output["logit"]
+        
+
+
 class Llama(LLMBase):
     def __init__(self, model_dir: Path | str,
                  args:ModelArgs,
@@ -23,9 +63,10 @@ class Llama(LLMBase):
                  device:str,
                  compile:bool=True,
                  compress:bool=True,
-                 verbose:bool=False):
+                 verbose:bool=False
+                 ):
         
-        super().__init__(model_dir, args, count, device, compile, compress, verbose)
+        super().__init__(model_dir, args, count, device, compile, compress, verbose, LlamaWrapper)
         # Custom inputs
         self._freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads, args.max_seq_len * 2, args.rope_theta)
         self.freqs_cis = self._freqs_cis[0:1]
@@ -192,12 +233,11 @@ class Llama(LLMBase):
 if __name__ == "__main__":
 
     llama = Llama.from_pretrained(model_dir="npu_model", max_batch_size=1,
-                                  max_seq_len=128, chunk_size=32, export=False,
+                                  max_seq_len=128, chunk_size=4, export=False,
                                   device="NPU",
                                   compile=True,
                                   compress=False,
                                   verbose=True)
-
     output = llama.generate(prompt=["I was wondering why you"],
                             max_new_tokens=30)
 
