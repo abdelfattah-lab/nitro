@@ -22,6 +22,16 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 def precompute_freqs_cis_rect(dim:int, end:int, theta:float = 10000.0):
     return torch.view_as_real(precompute_freqs_cis(dim, end, theta))
 
+def precompute_freqs_cis_rect_exp(dim: int, end: int, theta: float = 10000.0):
+    # TODO: VERIFY CORRECTNESS.
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device, dtype=torch.float16)
+    freqs = torch.outer(t, freqs)
+    freqs_real = torch.cos(freqs)
+    freqs_imag = torch.sin(freqs)
+    freqs_cis_rect = torch.stack((freqs_real, freqs_imag), dim=-1)
+    return freqs_cis_rect
+
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
     # assert 0 <= 1 < ndim

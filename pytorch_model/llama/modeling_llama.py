@@ -2,8 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import math
-from model.llama.helpers import repeat_kv, apply_rotary_emb_rectangular
-from model.llama.config import ModelArgs
+from pytorch_model.helpers import repeat_kv, apply_rotary_emb_rectangular
+from pytorch_model.llama.config import ModelArgs
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -41,7 +41,7 @@ class FeedForward(nn.Module):
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
         self.w3 = nn.Linear(dim, hidden_dim, bias=False)
 
-    def forward(self, x):
+    def forward(self, x:torch.Tensor):
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 class Attention(nn.Module):
@@ -141,7 +141,7 @@ class TransformerBlock(nn.Module):
         out = h + self.feed_forward(h_norm)
         return out, cache_k, cache_v
 
-class Transformer(nn.Module):
+class Llama(nn.Module):
     def __init__(self, params: ModelArgs, offset:int=0, chunk_size:int=-1):
         super().__init__()
         self.params = params

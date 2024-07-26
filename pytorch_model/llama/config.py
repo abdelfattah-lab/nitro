@@ -3,7 +3,6 @@ from dataclasses import dataclass
 @dataclass
 class ModelArgs:
     model:str = "meta-llama/Meta-Llama-3-8B"
-
     dim:int = 4096
     n_layers:int = 32
     n_heads:int = 32
