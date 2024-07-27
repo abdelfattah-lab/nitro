@@ -1,5 +1,5 @@
-from .llama.modeling_llama import Llama
+from .llama.modeling_llama import LlamaModel
 
 __all__ = [
-    'Llama'
+    'LlamaModel'
 ]

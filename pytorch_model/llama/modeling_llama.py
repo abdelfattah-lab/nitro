@@ -2,8 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import math
-from pytorch_model.helpers import repeat_kv, apply_rotary_emb_rectangular
-from pytorch_model.llama.config import ModelArgs
+from pytorch_model.utils.model_utils import repeat_kv, apply_rotary_emb_rectangular
+from pytorch_model.llama.config import LlamaArgs
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -20,7 +20,6 @@ class RMSNorm(torch.nn.Module):
 
     def forward(self, x:torch.Tensor):
         output = self._norm(x)
-        # propagate = output.clone().detach()
         return output * self.weight
 
 class FeedForward(nn.Module):
@@ -48,7 +47,7 @@ class Attention(nn.Module):
     """
     Modified Attention Block. Cache is replaced as an I/O for the forward.
     """
-    def __init__(self, args:ModelArgs):
+    def __init__(self, args:LlamaArgs):
         super().__init__()
         self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
         self.n_local_heads = args.n_heads
@@ -109,7 +108,7 @@ class Attention(nn.Module):
         return out, cache_k, cache_v
 
 class TransformerBlock(nn.Module):
-    def __init__(self, layer_id: int, args: ModelArgs):
+    def __init__(self, layer_id: int, args: LlamaArgs):
         super().__init__()
         self.n_heads = args.n_heads
         self.dim = args.dim
@@ -141,8 +140,8 @@ class TransformerBlock(nn.Module):
         out = h + self.feed_forward(h_norm)
         return out, cache_k, cache_v
 
-class Llama(nn.Module):
-    def __init__(self, params: ModelArgs, offset:int=0, chunk_size:int=-1):
+class LlamaModel(nn.Module):
+    def __init__(self, params: LlamaArgs, offset:int=0, chunk_size:int=-1):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size

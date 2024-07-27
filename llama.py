@@ -1,7 +1,7 @@
 from base import LLMBase, OVWrapper
-from pytorch_model import Llama
-from pytorch_model.llama.config import ModelArgs
-from pytorch_model.helpers import precompute_freqs_cis_rect
+from pytorch_model import LlamaModel
+from pytorch_model.llama.config import LlamaArgs
+from pytorch_model.utils.model_utils import precompute_freqs_cis_rect
 
 import openvino as ov
 import torch
@@ -58,7 +58,7 @@ class LlamaWrapper(OVWrapper):
 
 class Llama(LLMBase):
     def __init__(self, model_dir: Path | str,
-                 args:ModelArgs,
+                 args:LlamaArgs,
                  count:int,
                  device:str,
                  compile:bool=True,
@@ -85,7 +85,7 @@ class Llama(LLMBase):
         Generates the Llama model from source code.
         """
 
-        args = ModelArgs()
+        args = LlamaArgs()
         args.chunk_size = chunk_size
         args.max_seq_len = max_seq_len
         args.max_batch_size = max_batch_size
@@ -113,7 +113,7 @@ class Llama(LLMBase):
 
             checkpoint = torch.load(model_dir / "consolidated.00.pth")
             print("Creating PyTorch model...")
-            model = Transformer(args, chunk_size=chunk_size)
+            model = LlamaModel(args, chunk_size=chunk_size)
             print("Loading checkpoint...")
             model.load_state_dict(checkpoint, strict=True)
 
@@ -238,6 +238,7 @@ if __name__ == "__main__":
                                   compile=True,
                                   compress=False,
                                   verbose=True)
+    
     output = llama.generate(prompt=["I was wondering why you"],
                             max_new_tokens=30)
 

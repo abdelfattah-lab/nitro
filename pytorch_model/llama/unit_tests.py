@@ -1,9 +1,9 @@
 import torch
-from pytorch_model.helpers import apply_rotary_emb_rectangular, apply_rotary_emb, \
+from pytorch_model.utils.model_utils import apply_rotary_emb_rectangular, apply_rotary_emb, \
                     precompute_freqs_cis, precompute_freqs_cis_rect
-from pytorch_model.llama.modeling_llama import ModelArgs
+from pytorch_model.llama.modeling_llama import LlamaArgs
 
-args = ModelArgs()
+args = LlamaArgs()
 
 ### APPLY RECTANGULAR ROTARY EMBEDDINGS VERIFICATION #####
 token = torch.tensor([[128000, 5592, 663]])
@@ -36,25 +36,3 @@ def generate_mask(length, position):
         [torch.zeros((length, position)), mask]
     ).type_as(token)
     return mask
-
-# Original model
-# import source_model
-
-# print("SOURCE")
-# x = torch.randn([1,length,4096])
-# source = source_model.Attention(args).eval()
-# mask = generate_mask(length, 0)
-# source_out = source(x, 0, freqs_cis, None)
-
-# import rewritten_models
-# print("REWRITTEN")
-# mask = torch.full([1,32,1,512], float("-inf"))
-# mask[:,:,:,-length:] = 0
-# cache_k = torch.zeros([1,512,8,128])
-# cache_v = torch.zeros([1,512,8,128])
-# test = rewritten_models.Attention(args).eval()
-# test.wq = source.wq
-# test.wk = source.wk
-# test.wv = source.wv
-# test.wo = source.wo
-# test_out, cache_k, cache_v = test(x, mask, freqs_cis_rect, cache_k, cache_v)

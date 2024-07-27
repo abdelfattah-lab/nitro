@@ -127,8 +127,6 @@ class OVWrapper:
         if self.verbose:
             print(*text)
 
-
-
 class LLMBase:
     """
     Base model for LLM deployment.
@@ -234,11 +232,11 @@ class LLMBase:
         Runs inference for text generation.
 
         Parameters:
-        prompt (list[str])      : input string prompt.
-        max_new_tokens (int)    : number of new tokens to generate.
+            prompt (list[str]): input string prompt.
+            max_new_tokens (int): number of new tokens to generate.
 
         Returns:
-        tokens (list[str])      : completed text, new tokens with original prompt.
+            tokens (list[str]): completed text, new tokens with original prompt.
         """
         tokens = self._generate_tokens(prompt)
         next_token = tokens.pop()

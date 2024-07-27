@@ -1,8 +1,8 @@
 from dataclasses import dataclass
+from pytorch_model.utils.config_utils import get_args_aux
 
 @dataclass
-class ModelArgs:
-    model:str = "meta-llama/Meta-Llama-3-8B"
+class LlamaArgs:
     dim:int = 4096
     n_layers:int = 32
     n_heads:int = 32
@@ -15,4 +15,17 @@ class ModelArgs:
     max_batch_size:int = 1
     max_seq_len:int = 128
     chunk_size:int = 16
+
+import os
+from pathlib import Path
+
+def get_llama_args(model_name:str):
+    """
+    Obtains the model.
     
+    """
+    path = os.path.dirname(os.path.abspath(__file__))
+    path = Path(path) / model_name
+
+    args = get_args_aux(model_name, LlamaArgs, path)
+    return args
