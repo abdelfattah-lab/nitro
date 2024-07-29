@@ -70,7 +70,7 @@ class Attention(nn.Module):
     ):
         
         bsz, seqlen, _ = x.shape
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)        
+        xq, xk, xv = self.q_proj(x), self.k_proj(x), self.v_proj(x)        
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
@@ -104,7 +104,7 @@ class Attention(nn.Module):
         # Output
         output = output.transpose(1, 2).view(bsz, seqlen, -1)
 
-        out = self.wo(output)
+        out = self.o_proj(output)
         return out, cache_k, cache_v
 
 class TransformerBlock(nn.Module):
