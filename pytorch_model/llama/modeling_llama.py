@@ -36,12 +36,12 @@ class FeedForward(nn.Module):
         hidden_dim = int(ffn_dim_multiplier * hidden_dim)
         
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.gate_proj = nn.Linear(dim, hidden_dim, bias=False)
+        self.down_proj = nn.Linear(hidden_dim, dim, bias=False)
+        self.up_proj = nn.Linear(dim, hidden_dim, bias=False)
 
     def forward(self, x:torch.Tensor):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 class Attention(nn.Module):
     """
@@ -55,10 +55,10 @@ class Attention(nn.Module):
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
 
-        self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
+        self.q_proj = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
 
     def forward(
         self,
@@ -113,16 +113,16 @@ class TransformerBlock(nn.Module):
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.head_dim = args.dim // args.n_heads
-        self.attention = Attention(args)
-        self.feed_forward = FeedForward(
+        self.self_attn = Attention(args)
+        self.mlp = FeedForward(
             dim=args.dim,
             hidden_dim=4 * args.dim,
             multiple_of=args.multiple_of,
             ffn_dim_multiplier=args.ffn_dim_multiplier,
         )
         self.layer_id = layer_id
-        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.input_layernorm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.post_attention_layernorm = RMSNorm(args.dim, eps=args.norm_eps)
 
     @torch.inference_mode()
     def forward(
@@ -133,11 +133,11 @@ class TransformerBlock(nn.Module):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor
     ):
-        x_norm = self.attention_norm(x)
-        out, cache_k, cache_v = self.attention(x_norm, mask, freqs_cis, cache_k, cache_v)
+        x_norm = self.input_layernorm(x)
+        out, cache_k, cache_v = self.self_attn(x_norm, mask, freqs_cis, cache_k, cache_v)
         h = x + out
-        h_norm = self.ffn_norm(h)
-        out = h + self.feed_forward(h_norm)
+        h_norm = self.post_attention_layernorm(h)
+        out = h + self.mlp(h_norm)
         return out, cache_k, cache_v
 
 class LlamaModel(nn.Module):
@@ -159,7 +159,7 @@ class LlamaModel(nn.Module):
             self.chunk_size = self.n_layers
 
 
-        self.tok_embeddings = nn.Embedding(
+        self.embed_tokens = nn.Embedding(
             params.vocab_size, params.dim
         )
 
@@ -168,7 +168,7 @@ class LlamaModel(nn.Module):
             self.layers.append(TransformerBlock(layer_id, params))
 
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
-        self.output = nn.Linear(
+        self.lm_head = nn.Linear(
             params.dim, params.vocab_size, bias=False
         )
 
@@ -203,7 +203,7 @@ class LlamaModel(nn.Module):
                 freqs_cis: torch.Tensor,
                 params: dict):
         
-        return self.tok_embeddings(x)
+        return self.embed_tokens(x)
     
     def transformer_chunk(self, x: torch.Tensor,
                 mask: torch.Tensor,
@@ -224,4 +224,4 @@ class LlamaModel(nn.Module):
                 freqs_cis: torch.Tensor,
                 params: dict):
         
-        return self.output(self.norm(x))
+        return self.lm_head(self.norm(x))
