@@ -20,15 +20,17 @@ class Converter():
     Class to convert provided PyTorch models into OpenVINO IR formats.
     """
 
-    def __init__(self, model:str, directory:Optional[str] = None):
+    def __init__(self, model:str, directory:Optional[str] = None, args:Optional[Any] = None):
         """
         Initializes a generic Converter.
 
         Params:
             model (str): Name of the model as defined in Hugging Face (e.g. meta-llama/Meta-Llama-3).
             dir (str): The directory to save the OpenVINO IR formats. If not specified, saves to 'ir_model' at working directory.
+            args (Any): The model arguments to be passed.
         """
         self.model_name = model
+        self.model_args = args
 
         # Configuring directories
         if directory == None: directory = "ir_model"
@@ -45,17 +47,27 @@ class Converter():
         if not os.path.isdir(self.tokenizer_directory):
             os.makedirs(self.tokenizer_directory)
 
+    @classmethod
+    def convert(cls, model:str, directory:Optional[str] = None, args:Optional[Any] = None):
+        converter = cls(model, directory, args)
+        converter.initialize_model(args)
+        converter.convert_chunks(args)
+
     def initialize_model(self, args:Any=None):
         # Saves and loads the weights
         self._save_weights()
 
         # Loading model and directory
-        self.pytorch_model = get_model(self.model_name)
-        self.model_args = get_args(self.model_name)
+        if not self.model_args:
+            self.model_args = get_args(self.model_name)
+        
+        self.pytorch_model = get_model(self.model_name, self.model_args)
+        
+        print(self.model_args)
 
         self.pytorch_model.load_state_dict(torch.load(self.directory / "model_weights.pth"))
     
-    def convert(self):
+    def convert_chunks(self):
         # Generates example inputs for conversion
         example_inputs = generate_auto(self.model_args, "x", "mask", "freqs_cis", "kv_caches")
         shapes = generate_shape(example_inputs)

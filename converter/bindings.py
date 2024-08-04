@@ -54,13 +54,14 @@ def get_args(model_name:str) -> Any:
     family = _obtain_family(model_name)
     return _obtain_args(family)(model_name)
 
-def get_model(model_name:str) -> nn.Module:
+def get_model(model_name:str, args=None) -> nn.Module:
     """
     Returns the model, with the correct arguments initialized. Parameters have not
     yet been loaded.
     """
     family = _obtain_family(model_name)
     model = _obtain_model_class(family)
-    args = _obtain_args(family)(model_name)
+    if not args:
+        args = _obtain_args(family)(model_name)
 
     return model(args)

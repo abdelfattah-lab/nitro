@@ -149,7 +149,7 @@ class LLMBase:
 
         wrapper = OVWrapper if wrapper is None else wrapper
         self.model = wrapper(llm_dir, self.device, count,
-                               verbose=verbose, warm_up=False, compile=compile)
+                               verbose=verbose, warm_up=True, compile=compile)
         
         core = ov.Core()
         self.tokenizer = core.compile_model(token_dir / "openvino_tokenizer.xml", "CPU")
@@ -250,6 +250,3 @@ class LLMBase:
         # Detokenizer
         outputs = self.detokenizer(np.array(tokens).reshape(1, -1))
         return outputs["string_output"]
-
-if __name__ == "__main__":
-    _ = LLMBase("npu_model", "NPU")

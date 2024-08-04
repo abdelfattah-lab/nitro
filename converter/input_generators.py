@@ -30,6 +30,21 @@ def generate_kv_caches(args) -> dict[str, torch.Tensor]:
     return params
 
 def generate_auto(args, *input_names:str) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+    """
+    Generates an example_input for conversion.
+
+    Params:
+        args (Any): the model arguments, e.g. LlamaArgs
+        input_names (str): The list of input names that are used.
+
+    The input names are standardized as the following:
+    - ["x"] - token indices.
+    - ["mask"] - a causal mask for the attention mechanism.
+    - ["freqs_cis"] - the 
+    - ["kv_caches"] - the KV-caches to be used. This keyword is special
+                       because it generates a dictionary of k and v caches,
+                       due the the dynamic sizing that is generally unsupported by the conversion.
+    """
     inputs = {}
 
     mapping = {
@@ -48,12 +63,12 @@ def generate_auto(args, *input_names:str) -> dict[str, torch.Tensor | dict[str, 
     return inputs
 
 def flatten_dict(d):
-    def recurse(t, parent_key=''):
+    def recurse(t):
         items = {}
         for k, v in t.items():
             new_key = k  # Use the current key only
             if isinstance(v, dict):
-                nested_items = recurse(v, new_key)
+                nested_items = recurse(v)
                 for nk, nv in nested_items.items():
                     if nk in items:
                         raise KeyError(f"Key conflict: {nk}")
