@@ -12,9 +12,11 @@ class LlamaArgs:
     ffn_dim_multiplier:int = 1.3
     norm_eps:int = 5e-5
     rope_theta:int = 500000
+
     max_batch_size:int = 1
     max_seq_len:int = 128
     chunk_size:int = 16
+    inference_size:int = 1
 
 import os
 from pathlib import Path

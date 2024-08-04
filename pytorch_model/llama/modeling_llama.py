@@ -141,7 +141,7 @@ class TransformerBlock(nn.Module):
         return out, cache_k, cache_v
 
 class LlamaModel(nn.Module):
-    def __init__(self, params: LlamaArgs, offset:int=0, chunk_size:int=-1):
+    def __init__(self, params: LlamaArgs, offset:int=0):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size
@@ -154,7 +154,7 @@ class LlamaModel(nn.Module):
 
         # Parameters
         self.offset = offset
-        self.chunk_size = chunk_size
+        self.chunk_size = params.chunk_size
         if self.chunk_size == -1:
             self.chunk_size = self.n_layers
 
@@ -175,16 +175,16 @@ class LlamaModel(nn.Module):
     def forward(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                params: dict):
+                kv_caches: dict):
 
         if self.include_embedding:
-            x = self.embedding(x, mask, freqs_cis, params)
+            x = self.embedding(x, mask, freqs_cis, kv_caches)
         
         if self.include_transformer:
-            x, cache_k_outs, cache_v_outs = self.transformer_chunk(x, mask, freqs_cis, params)
+            x, cache_k_outs, cache_v_outs = self.transformer_chunk(x, mask, freqs_cis, kv_caches)
         
         if self.include_output:
-            x = self.output_chunk(x, mask, freqs_cis, params)
+            x = self.output_chunk(x, mask, freqs_cis, kv_caches)
 
         out = x
 
@@ -201,19 +201,20 @@ class LlamaModel(nn.Module):
     def embedding(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                params: dict):
+                kv_caches: dict):
         
         return self.embed_tokens(x)
     
     def transformer_chunk(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                params: dict):
+                kv_caches: dict):
         
         cache_k_outs = []
+        print(self.offset, self.offset + self.chunk_size)
         cache_v_outs = []
         for i in range(self.offset, self.offset + self.chunk_size):    
-            x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, params[f'cache_k_{i}'], params[f'cache_v_{i}'])
+            x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, kv_caches[f'cache_k_{i}'], kv_caches[f'cache_v_{i}'])
             cache_k_outs.append(cache_k_out_)
             cache_v_outs.append(cache_v_out_)
 
@@ -222,6 +223,6 @@ class LlamaModel(nn.Module):
     def output_chunk(self, x: torch.Tensor,
                 mask: torch.Tensor,
                 freqs_cis: torch.Tensor,
-                params: dict):
+                kv_caches: dict):
         
         return self.lm_head(self.norm(x))
