@@ -9,27 +9,27 @@ import torch
 from pytorch_model.utils.model_utils import precompute_freqs_cis_rect
 from typing import Any
 
-def generate_x(args) -> torch.Tensor:
-    return torch.randint(0, args.vocab_size, [args.max_batch_size, args.inference_size])
+def generate_x(model_args, conversion_args) -> torch.Tensor:
+    return torch.randint(0, model_args.vocab_size, [model_args.max_batch_size, conversion_args.inference_size])
 
-def generate_mask(args) -> torch.Tensor:
-    return torch.full([args.max_batch_size, args.n_heads, args.inference_size, args.max_seq_len], float('-inf'))
+def generate_mask(model_args, conversion_args) -> torch.Tensor:
+    return torch.full([model_args.max_batch_size, model_args.n_heads, conversion_args.inference_size, model_args.max_seq_len], float('-inf'))
 
-def generate_freq_cis(args) -> torch.Tensor:
+def generate_freq_cis(model_args, conversion_args) -> torch.Tensor:
     return precompute_freqs_cis_rect(
-                args.dim // args.n_heads,
-                args.max_seq_len * 2,
-                args.rope_theta
-            )[0:args.inference_size]
+                model_args.dim // model_args.n_heads,
+                model_args.max_seq_len * 2,
+                model_args.rope_theta
+            )[0:conversion_args.inference_size]
 
-def generate_kv_caches(args) -> dict[str, torch.Tensor]:
+def generate_kv_caches(model_args, conversion_args) -> dict[str, torch.Tensor]:
     params = {}
-    for i in range(args.n_layers):
-        params[f"cache_k_{i}"] = torch.zeros([args.max_batch_size, args.max_seq_len, args.n_kv_heads, args.dim // args.n_heads])
-        params[f"cache_v_{i}"] = torch.zeros([args.max_batch_size, args.max_seq_len, args.n_kv_heads, args.dim // args.n_heads])
+    for i in range(model_args.n_layers):
+        params[f"cache_k_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.n_kv_heads, model_args.dim // model_args.n_heads])
+        params[f"cache_v_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.n_kv_heads, model_args.dim // model_args.n_heads])
     return params
 
-def generate_auto(args, *input_names:str) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+def generate_auto(model_args, conversion_args, *input_names:str) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     """
     Generates an example_input for conversion.
 
@@ -58,7 +58,7 @@ def generate_auto(args, *input_names:str) -> dict[str, torch.Tensor | dict[str, 
         if input_name not in mapping:
             raise ValueError(f"{input_name} is not a valid input name!")
         func = mapping[input_name]
-        inputs[input_name] = func(args)
+        inputs[input_name] = func(model_args, conversion_args)
     
     return inputs
 

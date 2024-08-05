@@ -211,7 +211,6 @@ class LlamaModel(nn.Module):
                 kv_caches: dict):
         
         cache_k_outs = []
-        print(self.offset, self.offset + self.chunk_size)
         cache_v_outs = []
         for i in range(self.offset, self.offset + self.chunk_size):    
             x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, kv_caches[f'cache_k_{i}'], kv_caches[f'cache_v_{i}'])

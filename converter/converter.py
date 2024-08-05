@@ -15,22 +15,30 @@ from transformers import AutoTokenizer
 
 import os
 
-class Converter():
+@dataclass
+class ConversionConfig:
+    chunk_size:int = 16
+    inference_size:int = 1
+
+class Converter:
     """
     Class to convert provided PyTorch models into OpenVINO IR formats.
     """
 
-    def __init__(self, model:str, directory:Optional[str] = None, args:Optional[Any] = None):
+    def __init__(self, model:str, directory:Optional[str] = None, model_args:Optional[Any] = None, conversion_args:Optional[ConversionConfig] = None):
         """
         Initializes a generic Converter.
 
         Params:
             model (str): Name of the model as defined in Hugging Face (e.g. meta-llama/Meta-Llama-3).
             dir (str): The directory to save the OpenVINO IR formats. If not specified, saves to 'ir_model' at working directory.
-            args (Any): The model arguments to be passed.
+            model_args (Any): The model arguments to be passed.
         """
         self.model_name = model
-        self.model_args = args
+        self.model_args = model_args
+        self.conversion_args = conversion_args
+        if conversion_args is None:
+            self.conversion_args = ConversionConfig()
 
         # Configuring directories
         if directory == None: directory = "ir_model"
@@ -50,10 +58,14 @@ class Converter():
     @classmethod
     def convert(cls, model:str, directory:Optional[str] = None, args:Optional[Any] = None):
         converter = cls(model, directory, args)
-        converter.initialize_model(args)
-        converter.convert_chunks(args)
+        print("Initializing model")
+        converter.initialize_model()
+        print("Converting chunks")
+        converter.convert_chunks()
+        print("Generating tokenizers")
+        converter.generate_tokenizers()
 
-    def initialize_model(self, args:Any=None):
+    def initialize_model(self):
         # Saves and loads the weights
         self._save_weights()
 
@@ -69,13 +81,11 @@ class Converter():
     
     def convert_chunks(self):
         # Generates example inputs for conversion
-        example_inputs = generate_auto(self.model_args, "x", "mask", "freqs_cis", "kv_caches")
+        example_inputs = generate_auto(self.model_args, self.conversion_args, "x", "mask", "freqs_cis", "kv_caches")
         shapes = generate_shape(example_inputs)
 
         # Conversion to IR Format / Chunking
         self._convert_chunks(example_inputs, shapes)
-
-        self.generate_tokenizers()
 
 
     def _convert_chunks(self, example_inputs, shapes) -> None:
@@ -92,8 +102,8 @@ class Converter():
         print("Converting transformer layers...")
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = False, True, False
 
-        for offset in range(0, self.model_args.n_layers, self.model_args.chunk_size):
-            print(f" > Block: {offset}-{offset + self.model_args.chunk_size-1}")
+        for offset in range(0, self.model_args.n_layers, self.conversion_args.chunk_size):
+            print(f" > Block: {offset}-{offset + self.conversion_args.chunk_size-1}")
             self.pytorch_model.offset = offset
 
             conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
@@ -105,8 +115,6 @@ class Converter():
 
         conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
         count += 1
-        
-
 
     def _save_weights(self) -> None:
         """

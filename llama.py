@@ -3,7 +3,8 @@ from pytorch_model import LlamaModel
 from pytorch_model.llama.config import LlamaArgs
 from pytorch_model.utils.model_utils import precompute_freqs_cis_rect
 
-from converter import Converter
+from converter import Converter, ConversionConfig
+import gc
 
 import openvino as ov
 import torch
@@ -86,6 +87,7 @@ class Llama(LLMBase):
         Generates the Llama model from source code.
         """
         model_args = LlamaArgs()
+
         model_args.chunk_size = chunk_size
         model_args.max_seq_len = max_seq_len
         model_args.max_batch_size = max_batch_size
@@ -110,6 +112,10 @@ class Llama(LLMBase):
                     count = number
         count += 1
         print(count)
+
+        gc.collect() # the collector object takes up a lot of space; make sure its cleared first.
+
+        print("Creating Llama object")
         return Llama(model_dir, model_args, count, **kwargs)
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
@@ -150,7 +156,7 @@ class Llama(LLMBase):
 if __name__ == "__main__":
 
     llama = Llama.from_pretrained(model_dir="npu_model", max_batch_size=1,
-                                  max_seq_len=128, chunk_size=16, export=False,
+                                  max_seq_len=128, chunk_size=16, export=True,
                                   device="NPU",
                                   compile=True,
                                   compress=False,

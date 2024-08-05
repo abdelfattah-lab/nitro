@@ -15,8 +15,6 @@ class LlamaArgs:
 
     max_batch_size:int = 1
     max_seq_len:int = 128
-    chunk_size:int = 16
-    inference_size:int = 1
 
 import os
 from pathlib import Path

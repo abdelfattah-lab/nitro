@@ -1,5 +1,6 @@
-from .converter import Converter
+from .converter import Converter, ConversionConfig
 
 __all__ = [
     'Converter'
+    'ConverterConfig'
 ]
