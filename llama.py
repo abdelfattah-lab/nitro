@@ -1,22 +1,24 @@
 from base import LLMBase, OVWrapper
-from pytorch_model import LlamaModel
 from pytorch_model.llama.config import LlamaArgs
-from pytorch_model.utils.model_utils import precompute_freqs_cis_rect
 
 from converter import Converter, ConversionConfig
 import gc
 
-import openvino as ov
 import torch
 import os
 from pathlib import Path
 import time
 
 # These two imports are essential to ensure that the tokenizers can be imported.
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
 from openvino_tokenizers import convert_tokenizer
-from modifiers import parse_and_rename_layers, make_stateful, conversion_wrapper, get_shape_dict
+from typing import Type
 import re
+
+def from_dict(cls, data: dict):
+    # Extract only the keys that are in the dataclass fields
+    valid_keys = {key: data[key] for key in data if key in cls.__annotations__}
+    return cls(**valid_keys)
 
 class LlamaWrapper(OVWrapper):
     def __init__(self,
@@ -54,7 +56,6 @@ class LlamaWrapper(OVWrapper):
             if "x" in output:
                 inputs["x"] = output["x"]
         return output["logit"]
-        
 
 
 class Llama(LLMBase):
@@ -69,9 +70,9 @@ class Llama(LLMBase):
         
         super().__init__(model_dir, args, count, device, compile, compress, verbose, LlamaWrapper)
         # Custom inputs
-        self._freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads, args.max_seq_len * 2, args.rope_theta)
+        self._freqs_cis = self._precompute_freqs_cis(args.hidden_size // args.num_attention_heads, args.max_seq_len * 2, args.rope_theta)
         self.freqs_cis = self._freqs_cis[0:1]
-        self.mask = torch.full([args.max_batch_size, args.n_heads, 1, args.max_seq_len], float('-inf'))
+        self.mask = torch.full([args.max_batch_size, args.num_attention_heads, 1, args.max_seq_len], float('-inf'))
     
     @classmethod
     def from_pretrained(cls,
@@ -81,26 +82,32 @@ class Llama(LLMBase):
                         chunk_size: int,
                         inference_size: int = 1,
                         export:bool = False,
-                        *args, **kwargs
+                        **kwargs
                         ) -> "Llama":
         """
         Generates the Llama model from source code.
-        """
-        model_args = LlamaArgs()
 
-        model_args.chunk_size = chunk_size
-        model_args.max_seq_len = max_seq_len
-        model_args.max_batch_size = max_batch_size
-        model_args.inference_size = inference_size
+        Params:
+            model_dir (str): the directory 
+        """
+
+        # Model and conversion args
+        model_args = AutoConfig.from_pretrained("meta-llama/Meta-Llama-3-8B").to_dict()
+        model_args["max_seq_len"] = max_seq_len
+        model_args["max_batch_size"] = max_batch_size
+        model_args["rms_norm_eps"] = 5e-05
+        model_args = from_dict(LlamaArgs, model_args)
+        conversion_args = ConversionConfig(chunk_size=chunk_size, inference_size=inference_size)
 
         if not os.path.exists(model_dir) or export:
             # TODO: need to obtain meta-llama
-            converter = Converter("meta-llama/Meta-Llama-3-8B", model_dir, model_args)
+            converter = Converter("meta-llama/Meta-Llama-3-8B", model_dir, model_args, conversion_args)
             converter.initialize_model()
             converter.convert_chunks()
-
-            del converter # to save space
+            converter.generate_tokenizers()
+            del converter
         
+        # Counts the number of model chunks existing in the llm_dir.
         count = 0
         llm_dir = Path(model_dir) / "model"
         pattern = re.compile(r'^(\d+)\.xml$')
@@ -111,11 +118,9 @@ class Llama(LLMBase):
                 if number > count:
                     count = number
         count += 1
-        print(count)
 
-        gc.collect() # the collector object takes up a lot of space; make sure its cleared first.
+        gc.collect() # the converter object takes up a lot of space; make sure its cleared first.
 
-        print("Creating Llama object")
         return Llama(model_dir, model_args, count, **kwargs)
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
@@ -155,14 +160,14 @@ class Llama(LLMBase):
 
 if __name__ == "__main__":
 
-    llama = Llama.from_pretrained(model_dir="npu_model", max_batch_size=1,
-                                  max_seq_len=128, chunk_size=16, export=True,
+    llama = Llama.from_pretrained(model_dir="npu_model_exp", max_batch_size=1,
+                                  max_seq_len=128, chunk_size=16, export=False,
                                   device="NPU",
                                   compile=True,
                                   compress=False,
                                   verbose=True)
     
     output = llama.generate(prompt=["I was wondering why you"],
-                            max_new_tokens=12)
+                            max_new_tokens=25)
 
     print(output)

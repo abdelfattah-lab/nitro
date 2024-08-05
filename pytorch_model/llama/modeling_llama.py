@@ -25,20 +25,12 @@ class RMSNorm(torch.nn.Module):
 class FeedForward(nn.Module):
     def __init__(
         self,
-        dim: int,
-        hidden_dim: int,
-        multiple_of: int,
-        ffn_dim_multiplier: float,
+        args: LlamaArgs
     ):
         super().__init__()
-        hidden_dim = int(2 * hidden_dim / 3)
-        # custom dim factor multiplier
-        hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-        
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        self.gate_proj = nn.Linear(dim, hidden_dim, bias=False)
-        self.down_proj = nn.Linear(hidden_dim, dim, bias=False)
-        self.up_proj = nn.Linear(dim, hidden_dim, bias=False)
+        self.gate_proj = nn.Linear(args.hidden_size, args.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(args.intermediate_size, args.hidden_size, bias=False)
+        self.up_proj = nn.Linear(args.hidden_size, args.intermediate_size, bias=False)
 
     def forward(self, x:torch.Tensor):
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
@@ -49,16 +41,16 @@ class Attention(nn.Module):
     """
     def __init__(self, args:LlamaArgs):
         super().__init__()
-        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
-        self.n_local_heads = args.n_heads
+        self.n_kv_heads = args.num_attention_heads if args.num_key_value_heads is None else args.num_key_value_heads
+        self.n_local_heads = args.num_attention_heads
         self.n_local_kv_heads = self.n_kv_heads
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
-        self.head_dim = args.dim // args.n_heads
+        self.head_dim = args.hidden_size // args.num_attention_heads
 
-        self.q_proj = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
+        self.q_proj = nn.Linear(args.hidden_size, args.num_attention_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(args.hidden_size, self.n_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(args.hidden_size, self.n_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(args.num_attention_heads * self.head_dim, args.hidden_size, bias=False)
 
     def forward(
         self,
@@ -110,19 +102,14 @@ class Attention(nn.Module):
 class TransformerBlock(nn.Module):
     def __init__(self, layer_id: int, args: LlamaArgs):
         super().__init__()
-        self.n_heads = args.n_heads
-        self.dim = args.dim
-        self.head_dim = args.dim // args.n_heads
+        self.n_heads = args.num_attention_heads
+        self.dim = args.hidden_size
+        self.head_dim = args.hidden_size // args.num_attention_heads
         self.self_attn = Attention(args)
-        self.mlp = FeedForward(
-            dim=args.dim,
-            hidden_dim=4 * args.dim,
-            multiple_of=args.multiple_of,
-            ffn_dim_multiplier=args.ffn_dim_multiplier,
-        )
+        self.mlp = FeedForward(args)
         self.layer_id = layer_id
-        self.input_layernorm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.post_attention_layernorm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.input_layernorm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
     @torch.inference_mode()
     def forward(
@@ -145,7 +132,7 @@ class LlamaModel(nn.Module):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size
-        self.n_layers = params.n_layers
+        self.n_layers = params.num_hidden_layers
 
         # Including statuses
         self.include_embedding = False
@@ -154,22 +141,22 @@ class LlamaModel(nn.Module):
 
         # Parameters
         self.offset = offset
-        self.chunk_size = params.chunk_size
+        self.chunk_size = -1
         if self.chunk_size == -1:
             self.chunk_size = self.n_layers
 
 
         self.embed_tokens = nn.Embedding(
-            params.vocab_size, params.dim
+            params.vocab_size, params.hidden_size
         )
 
         self.layers = torch.nn.ModuleList()
-        for layer_id in range(params.n_layers):
+        for layer_id in range(params.num_hidden_layers):
             self.layers.append(TransformerBlock(layer_id, params))
 
-        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.norm = RMSNorm(params.hidden_size, eps=params.rms_norm_eps)
         self.lm_head = nn.Linear(
-            params.dim, params.vocab_size, bias=False
+            params.hidden_size, params.vocab_size, bias=False
         )
 
     def forward(self, x: torch.Tensor,
@@ -225,3 +212,6 @@ class LlamaModel(nn.Module):
                 kv_caches: dict):
         
         return self.lm_head(self.norm(x))
+    
+    def set_chunk_size(self, num:int) -> None:
+        self.chunk_size = num

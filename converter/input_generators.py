@@ -13,20 +13,20 @@ def generate_x(model_args, conversion_args) -> torch.Tensor:
     return torch.randint(0, model_args.vocab_size, [model_args.max_batch_size, conversion_args.inference_size])
 
 def generate_mask(model_args, conversion_args) -> torch.Tensor:
-    return torch.full([model_args.max_batch_size, model_args.n_heads, conversion_args.inference_size, model_args.max_seq_len], float('-inf'))
+    return torch.full([model_args.max_batch_size, model_args.num_attention_heads, conversion_args.inference_size, model_args.max_seq_len], float('-inf'))
 
 def generate_freq_cis(model_args, conversion_args) -> torch.Tensor:
     return precompute_freqs_cis_rect(
-                model_args.dim // model_args.n_heads,
+                model_args.hidden_size // model_args.num_attention_heads,
                 model_args.max_seq_len * 2,
                 model_args.rope_theta
             )[0:conversion_args.inference_size]
 
 def generate_kv_caches(model_args, conversion_args) -> dict[str, torch.Tensor]:
     params = {}
-    for i in range(model_args.n_layers):
-        params[f"cache_k_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.n_kv_heads, model_args.dim // model_args.n_heads])
-        params[f"cache_v_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.n_kv_heads, model_args.dim // model_args.n_heads])
+    for i in range(model_args.num_hidden_layers):
+        params[f"cache_k_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.num_key_value_heads, model_args.hidden_size // model_args.num_attention_heads])
+        params[f"cache_v_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.num_key_value_heads, model_args.hidden_size // model_args.num_attention_heads])
     return params
 
 def generate_auto(model_args, conversion_args, *input_names:str) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:

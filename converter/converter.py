@@ -11,7 +11,7 @@ from converter.input_generators import generate_auto, generate_shape
 from converter.chunk_conversion import conversion_wrapper
 
 import openvino_tokenizers as ot
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
 
 import os
 
@@ -94,6 +94,7 @@ class Converter:
         """
         count = 0
         print("Converting embedding layer...")
+        
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = True, False, False
         conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
         count += 1
@@ -102,7 +103,8 @@ class Converter:
         print("Converting transformer layers...")
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = False, True, False
 
-        for offset in range(0, self.model_args.n_layers, self.conversion_args.chunk_size):
+        self.pytorch_model.set_chunk_size(self.conversion_args.chunk_size) # TODO: this is jank.
+        for offset in range(0, self.model_args.num_hidden_layers, self.conversion_args.chunk_size):
             print(f" > Block: {offset}-{offset + self.conversion_args.chunk_size-1}")
             self.pytorch_model.offset = offset
 
