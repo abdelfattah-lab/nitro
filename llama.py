@@ -1,5 +1,6 @@
 from base import LLMBase, OVWrapper
 from pytorch_model.llama.config import LlamaArgs
+from pytorch_model.qwen2.config import Qwen2Args
 
 from converter import Converter, ConversionConfig
 import gc
@@ -14,6 +15,8 @@ from transformers import AutoTokenizer, AutoConfig
 from openvino_tokenizers import convert_tokenizer
 from typing import Type
 import re
+from dataclasses import asdict
+import json
 
 def from_dict(cls, data: dict):
     # Extract only the keys that are in the dataclass fields
@@ -54,7 +57,9 @@ class LlamaWrapper(OVWrapper):
         for i, model in enumerate(self.models):
             output = model(inputs)
             if "x" in output:
+                print(output["x"])
                 inputs["x"] = output["x"]
+        print(output["logit"])
         return output["logit"]
 
 
@@ -76,7 +81,8 @@ class Llama(LLMBase):
     
     @classmethod
     def from_pretrained(cls,
-                        model_dir: Path | str,
+                        pretrained_model: str,
+                        model_dir : Path,
                         max_batch_size: int,
                         max_seq_len: int,
                         chunk_size: int,
@@ -88,24 +94,48 @@ class Llama(LLMBase):
         Generates the Llama model from source code.
 
         Params:
-            model_dir (str): the directory 
+            pretrained_model (str): The name of the model from HF. If export is set to False, then this value is ignored.
+            model_dir (str | Path): The path of the model to save configuration / OpenVINO models.
+            max_batch_size (int): the max batch size.
+            max_seq_len (int): maximum sequence length. 
+            chunk_size (int): number of decoder layers per chunk.
+            inference_size (int): the input size.
+            export (bool): If true, generates the model from scratch (LLM, tokenizers).
         """
 
-        # Model and conversion args
-        model_args = AutoConfig.from_pretrained("meta-llama/Meta-Llama-3-8B").to_dict()
-        model_args["max_seq_len"] = max_seq_len
-        model_args["max_batch_size"] = max_batch_size
-        model_args["rms_norm_eps"] = 5e-05
-        model_args = from_dict(LlamaArgs, model_args)
-        conversion_args = ConversionConfig(chunk_size=chunk_size, inference_size=inference_size)
+        # If export, we are assuming [pretrained_model] is the name of the model.
+        if export:
+            model_args = AutoConfig.from_pretrained(pretrained_model).to_dict()
+            model_args["max_seq_len"] = max_seq_len
+            model_args["max_batch_size"] = max_batch_size
+            model_args["rms_norm_eps"] = 5e-05 # epsilon must be greater for the NPU
+            model_args["_name_or_path"] = pretrained_model
 
-        if not os.path.exists(model_dir) or export:
-            # TODO: need to obtain meta-llama
-            converter = Converter("meta-llama/Meta-Llama-3-8B", model_dir, model_args, conversion_args)
+            model_args = from_dict(Qwen2Args, model_args)
+
+            # saving config file
+            json_str = json.dumps(asdict(model_args), indent=4)
+            with open(Path(model_dir) / 'config.json', 'w') as json_file:
+                json_file.write(json_str)
+
+            conversion_args = ConversionConfig(chunk_size=chunk_size, inference_size=inference_size)
+
+            converter = Converter(pretrained_model, model_dir, model_args, conversion_args)
             converter.initialize_model()
             converter.convert_chunks()
             converter.generate_tokenizers()
             del converter
+
+        # If not export, we assume that [pretrained_model] is a directory, with
+        # fully loaded configuration.
+        else:
+            with open(Path(model_dir) / 'config.json', 'r') as file:
+                model_args = json.load(file)
+            config_path = model_args["_name_or_path"]
+            if config_path != pretrained_model:
+                raise ValueError(f"Model name found in config.json file does not match: {pretrained_model} expected, but found {config_path} instead")
+        
+            model_args = from_dict(Qwen2Args, model_args)
         
         # Counts the number of model chunks existing in the llm_dir.
         count = 0
@@ -160,8 +190,10 @@ class Llama(LLMBase):
 
 if __name__ == "__main__":
 
-    llama = Llama.from_pretrained(model_dir="npu_model_exp", max_batch_size=1,
-                                  max_seq_len=128, chunk_size=16, export=False,
+    llama = Llama.from_pretrained(pretrained_model="meta-llama/Meta-Llama-3-8B",
+                                  model_dir="npu_model_exp",
+                                  max_batch_size=1, max_seq_len=128, chunk_size=14,
+                                  export=True,
                                   device="NPU",
                                   compile=True,
                                   compress=False,

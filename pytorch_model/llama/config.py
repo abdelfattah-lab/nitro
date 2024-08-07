@@ -4,6 +4,7 @@ from typing import Optional
 
 @dataclass
 class LlamaArgs:
+    _name_or_path: str
     architectures: list[str]
     attention_bias: bool
     attention_dropout: float

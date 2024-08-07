@@ -2,30 +2,42 @@ from dataclasses import dataclass
 from pytorch_model.utils.config_utils import get_args_aux
 
 @dataclass
-class LlamaArgs:
-    dim:int = 4096
-    n_layers:int = 32
-    n_heads:int = 32
-    n_kv_heads:int = 8
-    vocab_size:int = 128256
-    multiple_of:int = 1024
-    ffn_dim_multiplier:int = 1.3
-    norm_eps:int = 5e-5
-    rope_theta:int = 500000
+class Qwen2Args:
+    _name_or_path: str
+    architectures: list[str]
+    attention_dropout: float
+    bos_token_id: int
+    eos_token_id: int
+    hidden_act: str
+    hidden_size: int
+    initializer_range: float
+    intermediate_size: int
+    max_position_embeddings: int
+    model_type: str
+    num_attention_heads: int
+    num_hidden_layers: int
+    num_key_value_heads: int
+    rms_norm_eps: float
+    rope_theta: float
+    tie_word_embeddings: bool
+    torch_dtype: str
+    transformers_version: str
+    use_cache: bool
+    vocab_size: int
+
     max_batch_size:int = 1
     max_seq_len:int = 128
-    chunk_size:int = 16
+
 
 import os
 from pathlib import Path
 
-def get_llama_args(model_name:str) -> LlamaArgs:
+def get_qwen2_args(model_name:str) -> Qwen2Args:
     """
-    Obtains the model.
-    
+    Obtains the Qwen2 model.
     """
     path = os.path.dirname(os.path.abspath(__file__))
     path = Path(path) / "config.json"
 
-    args = get_args_aux(model_name, LlamaArgs, path)
+    args = get_args_aux(model_name, Qwen2Args, path)
     return args

@@ -13,12 +13,18 @@ from converter.chunk_conversion import conversion_wrapper
 import openvino_tokenizers as ot
 from transformers import AutoTokenizer, AutoConfig
 
+import json
 import os
 
 @dataclass
 class ConversionConfig:
     chunk_size:int = 16
     inference_size:int = 1
+
+def from_dict(cls, data: dict):
+    # Extract only the keys that are in the dataclass fields
+    valid_keys = {key: data[key] for key in data if key in cls.__annotations__}
+    return cls(**valid_keys)
 
 class Converter:
     """

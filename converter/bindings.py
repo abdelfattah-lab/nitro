@@ -9,12 +9,13 @@ classes_hierarchy = {
         "meta-llama/Meta-Llama-3.1-8B",
     },
     "Qwen2" : {
-        "Qwen/Qwen2-7B-Instruct"
+        "Qwen/Qwen2-7B"
     }
 }
 
 class_to_model = {
     "Llama" : LlamaModel,
+    "Qwen2" : Qwen2Model,
 }
 
 class_to_args = {
