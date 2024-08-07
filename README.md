@@ -5,7 +5,7 @@ have been made.
 
 Note: this framework supports OpenVINO 2024.2.0 at the moment.
 
-[NITRO Workflow](assets/readme-diagram.md)
+![NITRO Workflow](assets/readme-diagram.png)
 
 # Getting Started
 
