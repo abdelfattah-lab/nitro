@@ -10,11 +10,11 @@ Note: this framework supports OpenVINO 2024.2.0 at the moment.
 # Getting Started
 
 Import the Llama model:
-```
+```python
 from generation import Llama
 ```
 Use the `from_pretrained` function, which will generate the OpenVINO IR model for the model:
-```
+```python
 llama = Llama.from_pretrained(pretrained_model="meta-llama/Meta-LLama-3-8B",
                                 model_dir="openvino_llama",
                                 max_batch_size=1, max_seq_len=128, chunk_size=16,
@@ -34,7 +34,7 @@ The following parameters are defined as follows:
 * `compress` - (currently not a supported feature) whether to use NNCF weight compression.
 
 Finally, for text generation, use the `generate()` function:
-```
+```python
 output = llama.generate(prompt=["I was wondering what is going on"],
                         max_new_tokens=10)
 ```
