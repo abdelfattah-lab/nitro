@@ -3,12 +3,13 @@ __pycache__
 
 *.xml
 *.bin
-*.png
+# *.png
 *.txt
 models/
 model_cache/
 *.svg
 *.dot
+*.pth
 
 build/
 .trash/

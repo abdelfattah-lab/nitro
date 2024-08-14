@@ -1,83 +1,157 @@
-from model.config import ModelArgs
-from pathlib import Path
-import openvino as ov
+from base import LLMBase, OVWrapper
+from pytorch_model.llama.config import LlamaArgs
+from pytorch_model.qwen2.config import Qwen2Args
+
+from converter import Converter, ConversionConfig
+import gc
+
 import torch
-import torch.nn as nn
-from typing import Optional
-import numpy as np
-import nncf
+import os
+from pathlib import Path
 import time
 
 # These two imports are essential to ensure that the tokenizers can be imported.
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
 from openvino_tokenizers import convert_tokenizer
+from typing import Type
+import re
+from dataclasses import asdict
+import json
 
-class Llama:
+def from_dict(cls, data: dict):
+    # Extract only the keys that are in the dataclass fields
+    valid_keys = {key: data[key] for key in data if key in cls.__annotations__}
+    return cls(**valid_keys)
+
+class LlamaWrapper(OVWrapper):
     def __init__(self,
-                 model_path: Path | str,
+                 llm_dir: Path | str,
+                 device: str,
+                 num_chunks:int,
+                 verbose:bool,
+                 warm_up:bool = True,
+                 compile:bool = True):
+        super().__init__(llm_dir, device, num_chunks, verbose, warm_up, compile)
+
+    def setup_transitions(self):
+        # Connections
+        # TODO: INCOMPLETE
+        self._print_if_verbose("Setting up transitions...")
+        for i in range(1, len(self.requests)):
+            req_1 = self.requests[i-1]
+            req_2 = self.requests[i]
+
+            # Cascading [x] connections
+            output = req_1.get_output_tensor(0)
+            req_2.set_tensor('x', output)
+    
+    def __call__(self,
+                 parallel_inputs:dict[str, torch.Tensor],
+                 series_inputs:dict[str, torch.Tensor]
+                 ) -> dict[str, torch.Tensor]:
+        # TODO: CONVERT FROM SYNCHRONOUS TO ASYNCHRONOUS.
+        # Some modifications
+        inputs = {}
+        inputs.update(parallel_inputs)
+        inputs.update(series_inputs)
+        for i, model in enumerate(self.models):
+            output = model(inputs)
+            if "x" in output:
+                print(output["x"])
+                inputs["x"] = output["x"]
+        print(output["logit"])
+        return output["logit"]
+
+
+class Llama(LLMBase):
+    def __init__(self, model_dir: Path | str,
+                 args:LlamaArgs,
+                 count:int,
                  device:str,
-                 args: ModelArgs,
-                 tokenizer:str="openvino_model/openvino_tokenizer.xml",
-                 detokenizer:str="openvino_model/openvino_detokenizer.xml",
                  compile:bool=True,
                  compress:bool=True,
-                 embedding:bool=True,
                  verbose:bool=False
                  ):
-        self.verbose = verbose
-        self.device = device
-        self.n_layers = args.n_layers
-
-        start = time.time()
-        # OpenVINO models as the backend
-        self._print_if_verbose("Importing model...")
-        core = ov.Core()
-        self.model = core.read_model(model_path)
-        if compress:
-            self.model = nncf.compress_weights(self.model, mode=nncf.CompressWeightsMode.INT8_ASYM)
-        if compile:
-            self._print_if_verbose(f"Compiling model to {self.device}...")
-            self.model = core.compile_model(self.model, self.device)
-        self._print_if_verbose("Compiling tokenizers...")
-        self.tokenizer = core.compile_model(tokenizer, "CPU")
-        self.detokenizer = core.compile_model(detokenizer, "CPU")
-
-        # KV-cache, mask instantiations - these are inputs
-        self._print_if_verbose("Instantiating Parameters...")
-        print(self.model)
-        self.k_cache = {}
-        self.v_cache = {}
-        for i in range(args.n_layers):
-            self.k_cache[f"cache_k_{i}"] = torch.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
-            self.v_cache[f"cache_v_{i}"] = torch.zeros(eval(self.model.input("cache_k_1").get_shape().to_string()))
-        self.mask = torch.full(eval(self.model.input("mask").get_shape().to_string()), float("-inf"))
-
-        # Token embeddings, if done outside the model.
-        if embedding:
-            self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim).eval() # THIS THING NEEDS TO BE LOADED IN AS WELL.
-        else:
-            self.tok_embeddings = lambda x : x
-
-        self.freqs_cis = self._precompute_freqs_cis(args.dim // args.n_heads,
-                                                    args.max_seq_len * 2,
-                                                    args.rope_theta)
+        
+        super().__init__(model_dir, args, count, device, compile, compress, verbose, LlamaWrapper)
+        # Custom inputs
+        self._freqs_cis = self._precompute_freqs_cis(args.hidden_size // args.num_attention_heads, args.max_seq_len * 2, args.rope_theta)
+        self.freqs_cis = self._freqs_cis[0:1]
+        self.mask = torch.full([args.max_batch_size, args.num_attention_heads, 1, args.max_seq_len], float('-inf'))
     
-        elapsed = time.time() - start
-        self._print_if_verbose(f"Finished pre-processing. Elapsed time: {elapsed:.4f}")
+    @classmethod
+    def from_pretrained(cls,
+                        pretrained_model: str,
+                        model_dir : Path,
+                        max_batch_size: int,
+                        max_seq_len: int,
+                        chunk_size: int,
+                        inference_size: int = 1,
+                        export:bool = False,
+                        **kwargs
+                        ) -> "Llama":
+        """
+        Generates the Llama model from source code.
 
-    def compile(self, device:str=None):
-        if device is not None:
-            self.device = device
-        start = time.time()
-        self._print_if_verbose(f"Compiling to {self.device}...")
+        Params:
+            pretrained_model (str): The name of the model from HF. If export is set to False, then this value is ignored.
+            model_dir (str | Path): The path of the model to save configuration / OpenVINO models.
+            max_batch_size (int): the max batch size.
+            max_seq_len (int): maximum sequence length. 
+            chunk_size (int): number of decoder layers per chunk.
+            inference_size (int): the input size.
+            export (bool): If true, generates the model from scratch (LLM, tokenizers).
+        """
 
-        # Experimental properties
-        core = ov.Core()
+        # If export, we are assuming [pretrained_model] is the name of the model.
+        if export:
+            model_args = AutoConfig.from_pretrained(pretrained_model).to_dict()
+            model_args["max_seq_len"] = max_seq_len
+            model_args["max_batch_size"] = max_batch_size
+            model_args["rms_norm_eps"] = 5e-05 # epsilon must be greater for the NPU
+            model_args["_name_or_path"] = pretrained_model
 
-        self.model = core.compile_model(self.model, self.device)
+            model_args = from_dict(Qwen2Args, model_args)
 
-        self._print_if_verbose(f"Compiled in {(time.time() - start):.4f} seconds")
-        pass
+            # saving config file
+            json_str = json.dumps(asdict(model_args), indent=4)
+            with open(Path(model_dir) / 'config.json', 'w') as json_file:
+                json_file.write(json_str)
+
+            conversion_args = ConversionConfig(chunk_size=chunk_size, inference_size=inference_size)
+
+            converter = Converter(pretrained_model, model_dir, model_args, conversion_args)
+            converter.initialize_model()
+            converter.convert_chunks()
+            converter.generate_tokenizers()
+            del converter
+
+        # If not export, we assume that [pretrained_model] is a directory, with
+        # fully loaded configuration.
+        else:
+            with open(Path(model_dir) / 'config.json', 'r') as file:
+                model_args = json.load(file)
+            config_path = model_args["_name_or_path"]
+            if config_path != pretrained_model:
+                raise ValueError(f"Model name found in config.json file does not match: {pretrained_model} expected, but found {config_path} instead")
+        
+            model_args = from_dict(Qwen2Args, model_args)
+        
+        # Counts the number of model chunks existing in the llm_dir.
+        count = 0
+        llm_dir = Path(model_dir) / "model"
+        pattern = re.compile(r'^(\d+)\.xml$')
+        for filename in os.listdir(llm_dir):
+            match = pattern.match(filename)
+            if match:
+                number = int(match.group(1))
+                if number > count:
+                    count = number
+        count += 1
+
+        gc.collect() # the converter object takes up a lot of space; make sure its cleared first.
+
+        return Llama(model_dir, model_args, count, **kwargs)
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
         """
@@ -90,151 +164,42 @@ class Llama:
         freqs_cis = torch.view_as_real(freqs_cis)
         return freqs_cis
 
-    def _prefill(self, tokens:list[int]) -> None:
+    def _iterate(self, token:int, step:int) -> torch.Tensor:
         """
-        Pre-fill stage of text generation. Current implementation is to feed each
-        token one-by-one, like the decode stage, while ignoring the output token.
-        
-        k_cache, v_cache, mask are all updated.
+        Performs one iteration of the LLM: Inputs a token, returns the logits.
         """
-        average_time = 0
+        self._update_freqs_cis(step)
+        self._update_mask(step)
         
-        for i, token in enumerate(tokens):
-            start = time.time()
-            self._update_mask(i)
-            fs = self.freqs_cis[i:i+1]
+        self.parallel_inputs["freqs_cis"] = self.freqs_cis
+        self.parallel_inputs["mask"] = self.mask
+        self.series_inputs["x"] = token
 
-            # Preparing the inputs
-            inputs = {
-                "mask": self.mask,
-                "freqs_cis": fs,
-                "x": torch.tensor([[token]])
-            }
-            inputs.update(self.k_cache)
-            inputs.update(self.v_cache)
-
-            # Running inference
-            output = self.model(inputs)
-            
-            # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
-            for j in range(0, self.n_layers):
-                self.k_cache[f"cache_k_{j}"] = output[f"cache_k_{j}_out"]
-                self.v_cache[f"cache_v_{j}"] = output[f"cache_v_{j}_out"]
-
-            elapsed = time.time() - start
-            average_time = (average_time * i + elapsed) / (i + 1)
-            self._print_if_verbose(">>", elapsed)
-        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
-
-    def _decode(self, tokens:list[int], first_token:torch.Tensor, max_new_tokens:int) -> list[int]:
-        """
-        Decode stage of text generation. Modifies [tokens] in place and returns
-        it.
-        
-        Parameters:
-        tokens (list[int])      : tokens from the prompt.
-        first_token (int)       : first token in the decode stage, which is the last token in the input sequence.
-        max_new_tokens (int)    : number of new tokens to generate.
-        
-        Returns:
-        tokens: list[int]       : complete token sequence.
-        """
-        next_token = first_token
-        start_idx = len(tokens)
-
-        average_time = 0
-        for i in range(start_idx, start_idx+max_new_tokens):
-            start = time.time()
-
-            tokens.append(next_token)
-            self._update_mask(i)
-            fs = self.freqs_cis[i:i+1]
-
-            # Preparing inputs
-            inputs = {
-                "mask": self.mask,
-                "freqs_cis": fs,
-                "x": torch.tensor([[next_token]])
-            }
-            inputs.update(self.k_cache)
-            inputs.update(self.v_cache)
-
-            # Running inference
-            output = self.model(inputs)
-
-            # Logits
-            logits = output["logits"]
-            
-            # Updating the KV-caches: 1-32 are the k-caches, 33-64 are the v-caches
-            for j in range(0, self.n_layers):
-                self.k_cache[f"cache_k_{j}"] = output[f"cache_k_{j}_out"]
-                self.v_cache[f"cache_v_{j}"] = output[f"cache_v_{j}_out"]
-            next_token = np.argmax(logits.squeeze()) # TODO: ADD OPTION FOR VARIATION
-            # print(logits.shape)
-
-            elapsed = time.time() - start
-            average_time = (average_time * (i - start_idx) + elapsed) / (i - start_idx + 1)
-            self._print_if_verbose(">>", elapsed)
-        self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
+        output = self.model(self.parallel_inputs, self.series_inputs)
+        return output
     
-        return tokens
 
-    def _print_if_verbose(self, *text) -> None:
-        if self.verbose:
-            print(*text)
-    
     def _update_mask(self, step:int) -> None:
         """
         Updates [self.mask] - must be updated with each new token.
         """
-        self.mask[:,:,:,-1-step] = 0
+        self.mask[:,:,:,-1-step:] = 0.0
 
-    def _generate_tokens(self, prompt) -> str:
-        """
-        Converts the list of prompts into a Python list of tokens.
-        """
-        return list(self.tokenizer(prompt)["input_ids"].squeeze())
-
-    def generate(self,
-                 prompt: list[str],
-                 max_new_tokens: Optional[int]
-                 ) -> list[str]:
-        """
-        Runs inference for text generation.
-
-        Parameters:
-        prompt (list[str])      : input string prompt.
-        max_new_tokens (int)    : number of new tokens to generate.
-
-        Returns:
-        tokens (list[str])      : completed text, new tokens with original prompt.
-        """
-        tokens = self._generate_tokens(prompt)
-        next_token = tokens.pop()
-
-        # Prefill
-        self._prefill(tokens)
-
-        # Generate
-        tokens = self._decode(tokens, next_token, max_new_tokens)
-
-        # Detokenizer
-        outputs = self.detokenizer(np.array(tokens).reshape(1, -1))
-        return outputs["string_output"]
+    def _update_freqs_cis(self, step:int) -> None:
+        self.freqs_cis = self._freqs_cis[step:step+1]
 
 if __name__ == "__main__":
 
-
-    llama = Llama(model_path="openvino_model/llama.xml",
-                  device="GPU",
-                  args=ModelArgs(n_layers=32, max_batch_size=1, max_seq_len=128),
-                  compile=False,
-                  embedding=False,
-                  verbose=True)
+    llama = Llama.from_pretrained(pretrained_model="meta-llama/Meta-Llama-3-8B",
+                                  model_dir="npu_model_exp",
+                                  max_batch_size=1, max_seq_len=128, chunk_size=14,
+                                  export=True,
+                                  device="NPU",
+                                  compile=True,
+                                  compress=False,
+                                  verbose=True)
     
-    llama_backend = llama.model
+    output = llama.generate(prompt=["I was wondering why you"],
+                            max_new_tokens=25)
 
-    # raise Exception
-    llama.compile()
-
-    print(llama.generate(["What is going on"], max_new_tokens=30))
+    print(output)
