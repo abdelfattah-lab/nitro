@@ -1,4 +1,4 @@
-# NPU Inference for LLMs
+# NITRO: NPU Inference for Transformers Optimization
 This package aims to serve LLMs with inference on Intel NPUs, using the
 OpenVINO toolkit. Because NPUs currently do not support LLMs, some modifications
 have been made.
