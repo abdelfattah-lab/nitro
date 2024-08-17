@@ -5,7 +5,6 @@ __pycache__
 *.bin
 # *.png
 *.txt
-models/
 model_cache/
 *.svg
 *.dot
@@ -17,3 +16,5 @@ build/
 # Generated files from npu-accelerate library
 cache/
 nc_workspace/
+
+config.json

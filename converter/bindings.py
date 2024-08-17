@@ -9,7 +9,8 @@ classes_hierarchy = {
         "meta-llama/Meta-Llama-3.1-8B",
     },
     "Qwen2" : {
-        "Qwen/Qwen2-7B"
+        "Qwen/Qwen2-7B",
+        "Qwen/Qwen2-0.5B"
     }
 }
 

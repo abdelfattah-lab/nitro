@@ -1,4 +1,4 @@
-from base import LLMBase, OVWrapper
+from models.base import LLMBase, OVWrapper
 from pytorch_model.llama.config import LlamaArgs
 from pytorch_model.qwen2.config import Qwen2Args
 
@@ -17,6 +17,7 @@ from typing import Type
 import re
 from dataclasses import asdict
 import json
+import numpy as np
 
 def from_dict(cls, data: dict):
     # Extract only the keys that are in the dataclass fields
@@ -57,9 +58,7 @@ class LlamaWrapper(OVWrapper):
         for i, model in enumerate(self.models):
             output = model(inputs)
             if "x" in output:
-                print(output["x"])
                 inputs["x"] = output["x"]
-        print(output["logit"])
         return output["logit"]
 
 
@@ -105,6 +104,8 @@ class Llama(LLMBase):
 
         # If export, we are assuming [pretrained_model] is the name of the model.
         if export:
+            if not os.path.exists(model_dir):
+                os.makedirs(model_dir)
             model_args = AutoConfig.from_pretrained(pretrained_model).to_dict()
             model_args["max_seq_len"] = max_seq_len
             model_args["max_batch_size"] = max_batch_size
@@ -187,19 +188,3 @@ class Llama(LLMBase):
 
     def _update_freqs_cis(self, step:int) -> None:
         self.freqs_cis = self._freqs_cis[step:step+1]
-
-if __name__ == "__main__":
-
-    llama = Llama.from_pretrained(pretrained_model="meta-llama/Meta-Llama-3-8B",
-                                  model_dir="npu_model_exp",
-                                  max_batch_size=1, max_seq_len=128, chunk_size=14,
-                                  export=True,
-                                  device="NPU",
-                                  compile=True,
-                                  compress=False,
-                                  verbose=True)
-    
-    output = llama.generate(prompt=["I was wondering why you"],
-                            max_new_tokens=25)
-
-    print(output)
