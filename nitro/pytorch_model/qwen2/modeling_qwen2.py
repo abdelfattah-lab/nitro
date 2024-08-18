@@ -2,8 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import math
-from pytorch_model.utils.model_utils import repeat_kv, apply_rotary_emb_rectangular
-from pytorch_model.qwen2.config import Qwen2Args
+from nitro.pytorch_model.utils.model_utils import repeat_kv, apply_rotary_emb_rectangular
+from nitro.pytorch_model.qwen2.config import Qwen2Args
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):

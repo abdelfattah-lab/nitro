@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from transformers import AutoModelForCausalLM
 from pathlib import Path
 
-from converter.bindings import get_args, get_model
-from converter.input_generators import generate_auto, generate_shape
-from converter.chunk_conversion import conversion_wrapper
+from nitro.converter.bindings import get_args, get_model
+from nitro.converter.input_generators import generate_auto, generate_shape
+from nitro.converter.chunk_conversion import conversion_wrapper
 
 import openvino_tokenizers as ot
 from transformers import AutoTokenizer, AutoConfig
@@ -81,7 +81,7 @@ class Converter:
         
         self.pytorch_model = get_model(self.model_name, self.model_args)
         
-        print(self.model_args)
+        # print(self.model_args)
 
         self.pytorch_model.load_state_dict(torch.load(self.directory / "model_weights.pth"))
     
@@ -123,7 +123,6 @@ class Converter:
                 for i in range(offset, offset + self.conversion_args.chunk_size):
                     local_kv_caches[f"cache_k_{i}"] = global_kv_caches[f"cache_k_{i}"]
                     local_kv_caches[f"cache_v_{i}"] = global_kv_caches[f"cache_v_{i}"]
-                print(local_kv_caches.keys())
                 example_inputs["kv_caches"] = local_kv_caches
             print(f" > Block: {offset}-{offset + self.conversion_args.chunk_size-1}")
             self.pytorch_model.offset = offset

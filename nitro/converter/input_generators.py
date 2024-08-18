@@ -6,7 +6,7 @@ example inputs in the convert_model function. When the model graph is complex
 This file provides helper functions to generate example_inputs.
 """
 import torch
-from pytorch_model.utils.model_utils import precompute_freqs_cis_rect
+from nitro.pytorch_model.utils.model_utils import precompute_freqs_cis_rect
 from typing import Any
 
 def generate_x(model_args, conversion_args) -> torch.Tensor:

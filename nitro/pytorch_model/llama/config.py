@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from pytorch_model.utils.config_utils import get_args_aux
+from nitro.pytorch_model.utils.config_utils import get_args_aux
 from typing import Optional
 
 @dataclass
