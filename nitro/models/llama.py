@@ -1,8 +1,7 @@
-from models.base import LLMBase, OVWrapper
-from pytorch_model.llama.config import LlamaArgs
-from pytorch_model.qwen2.config import Qwen2Args
+from nitro.models.base import LLMBase, OVWrapper
+from nitro.pytorch_model.llama.config import LlamaArgs
 
-from converter import Converter, ConversionConfig
+from nitro.converter import Converter, ConversionConfig
 import gc
 
 import torch
@@ -61,8 +60,7 @@ class LlamaWrapper(OVWrapper):
                 inputs["x"] = output["x"]
         return output["logit"]
 
-
-class Llama(LLMBase):
+class LlamaPipeline(LLMBase):
     def __init__(self, model_dir: Path | str,
                  args:LlamaArgs,
                  count:int,
@@ -88,7 +86,7 @@ class Llama(LLMBase):
                         inference_size: int = 1,
                         export:bool = False,
                         **kwargs
-                        ) -> "Llama":
+                        ) -> "LlamaPipeline":
         """
         Generates the Llama model from source code.
 
@@ -112,7 +110,7 @@ class Llama(LLMBase):
             model_args["rms_norm_eps"] = 5e-05 # epsilon must be greater for the NPU
             model_args["_name_or_path"] = pretrained_model
 
-            model_args = from_dict(Qwen2Args, model_args)
+            model_args = from_dict(LlamaArgs, model_args)
 
             # saving config file
             json_str = json.dumps(asdict(model_args), indent=4)
@@ -136,7 +134,7 @@ class Llama(LLMBase):
             if config_path != pretrained_model:
                 raise ValueError(f"Model name found in config.json file does not match: {pretrained_model} expected, but found {config_path} instead")
         
-            model_args = from_dict(Qwen2Args, model_args)
+            model_args = from_dict(LlamaArgs, model_args)
         
         # Counts the number of model chunks existing in the llm_dir.
         count = 0
@@ -152,7 +150,7 @@ class Llama(LLMBase):
 
         gc.collect() # the converter object takes up a lot of space; make sure its cleared first.
 
-        return Llama(model_dir, model_args, count, **kwargs)
+        return LlamaPipeline(model_dir, model_args, count, **kwargs)
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
         """

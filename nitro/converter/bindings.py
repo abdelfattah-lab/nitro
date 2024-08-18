@@ -1,5 +1,4 @@
-from pytorch_model import *
-import pytorch_model
+from nitro.pytorch_model import *
 import torch.nn as nn
 from typing import Any
 

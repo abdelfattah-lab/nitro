@@ -1,6 +1,5 @@
 from pathlib import Path
 import openvino as ov
-import openvino.runtime
 from typing import List
 import re
 import torch

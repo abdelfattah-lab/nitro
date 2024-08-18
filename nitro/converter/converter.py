@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from transformers import AutoModelForCausalLM
 from pathlib import Path
 
-from converter.bindings import get_args, get_model
-from converter.input_generators import generate_auto, generate_shape
-from converter.chunk_conversion import conversion_wrapper
+from nitro.converter.bindings import get_args, get_model
+from nitro.converter.input_generators import generate_auto, generate_shape
+from nitro.converter.chunk_conversion import conversion_wrapper
 
 import openvino_tokenizers as ot
 from transformers import AutoTokenizer, AutoConfig
@@ -81,7 +81,7 @@ class Converter:
         
         self.pytorch_model = get_model(self.model_name, self.model_args)
         
-        print(self.model_args)
+        # print(self.model_args)
 
         self.pytorch_model.load_state_dict(torch.load(self.directory / "model_weights.pth"))
     
@@ -102,6 +102,11 @@ class Converter:
         print("Converting embedding layer...")
         
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = True, False, False
+        kv_caches = None
+        if "kv_caches" in example_inputs:
+            kv_caches = True
+            global_kv_caches = example_inputs["kv_caches"]
+            example_inputs["kv_caches"] = torch.randn((1, 1))
         conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
         count += 1
 
@@ -109,8 +114,16 @@ class Converter:
         print("Converting transformer layers...")
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = False, True, False
 
+        
         self.pytorch_model.set_chunk_size(self.conversion_args.chunk_size) # TODO: this is jank.
         for offset in range(0, self.model_args.num_hidden_layers, self.conversion_args.chunk_size):
+            # Update kv caches
+            if kv_caches:
+                local_kv_caches = {}
+                for i in range(offset, offset + self.conversion_args.chunk_size):
+                    local_kv_caches[f"cache_k_{i}"] = global_kv_caches[f"cache_k_{i}"]
+                    local_kv_caches[f"cache_v_{i}"] = global_kv_caches[f"cache_v_{i}"]
+                example_inputs["kv_caches"] = local_kv_caches
             print(f" > Block: {offset}-{offset + self.conversion_args.chunk_size-1}")
             self.pytorch_model.offset = offset
 
@@ -120,6 +133,9 @@ class Converter:
         ############ Chunking output layer ############
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = False, False, True
         print("Converting output layer...")
+
+        if kv_caches:
+            example_inputs["kv_caches"] = torch.randn((1, 1))
 
         conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
         count += 1
