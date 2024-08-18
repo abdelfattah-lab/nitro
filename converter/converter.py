@@ -102,6 +102,11 @@ class Converter:
         print("Converting embedding layer...")
         
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = True, False, False
+        kv_caches = None
+        if "kv_caches" in example_inputs:
+            kv_caches = True
+            global_kv_caches = example_inputs["kv_caches"]
+            example_inputs["kv_caches"] = torch.randn((1, 1))
         conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
         count += 1
 
@@ -109,8 +114,17 @@ class Converter:
         print("Converting transformer layers...")
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = False, True, False
 
+        
         self.pytorch_model.set_chunk_size(self.conversion_args.chunk_size) # TODO: this is jank.
         for offset in range(0, self.model_args.num_hidden_layers, self.conversion_args.chunk_size):
+            # Update kv caches
+            if kv_caches:
+                local_kv_caches = {}
+                for i in range(offset, offset + self.conversion_args.chunk_size):
+                    local_kv_caches[f"cache_k_{i}"] = global_kv_caches[f"cache_k_{i}"]
+                    local_kv_caches[f"cache_v_{i}"] = global_kv_caches[f"cache_v_{i}"]
+                print(local_kv_caches.keys())
+                example_inputs["kv_caches"] = local_kv_caches
             print(f" > Block: {offset}-{offset + self.conversion_args.chunk_size-1}")
             self.pytorch_model.offset = offset
 
@@ -120,6 +134,9 @@ class Converter:
         ############ Chunking output layer ############
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = False, False, True
         print("Converting output layer...")
+
+        if kv_caches:
+            example_inputs["kv_caches"] = torch.randn((1, 1))
 
         conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
         count += 1
