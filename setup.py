@@ -9,7 +9,7 @@ setup(
     author='Anthony Fei',
     author_email='ayf7@cornell.edu',
     url='https://github.com/abdelfattah-lab/nitro',
-    packages=find_packages(),  # Automatically finds your package directories
+    packages=find_packages(),
     install_requires=[
         'openvino >= 2024.3.0',
         'openvino-tokenizers >= 2024.3.0.0',
