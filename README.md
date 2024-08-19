@@ -63,7 +63,7 @@ To generate with the same model without rebuilding the model, set the `export` p
 
 # Developer Information
 
-This section aims to document the motivation, architecture, and components of NITRO. Since NITRO is in an early stage, 
+This section aims to document the motivation, architecture, and components of NITRO.
 
 ## Simplified PyTorch Models
 NITRO is centered around `ov.convert_model` from PyTorch to OpenVINO IR form. Models provided by Hugging Face utilize booleans and NoneTypes frequently and, as a result, are not very friendly for OpenVINO conversion, and consequently model conversions with Optimum are prone to certain restrictions. As a result, we are re-engineering and simplifying popular model structures to support OpenVINO conversion.
