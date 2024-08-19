@@ -61,6 +61,22 @@ output = llama.generate(prompt=["I was wondering what is going on"],
 ```
 To generate with the same model without rebuilding the model, set the `export` parameter to False.
 
-# Developer Guide
+# Developer Information
 
-TODO
+This section aims to document the motivation, architecture, and components of NITRO. Since NITRO is in an early stage, 
+
+## Simplified PyTorch Models
+NITRO is centered around `ov.convert_model` from PyTorch to OpenVINO IR form. Models provided by Hugging Face utilize booleans and NoneTypes frequently and, as a result, are not very friendly for OpenVINO conversion, and consequently model conversions with Optimum are prone to certain restrictions. As a result, we are re-engineering and simplifying popular model structures to support OpenVINO conversion.
+
+The major simplifications include:
+- Input/Outputs for torch modules are tensors only, or data structures that contain tensors only (e.g. lists, tuples, or dictionaries). In the latter section, we must be careful.
+- Caches are represented by tensors.
+- Input names are standardized: `x`, `position_ids`, `mask`, and `kv_caches` (which is a dictionary of tensors).
+- Output names are standardized: there are `x` and `logits`.
+
+## Model Conversion
+Unfortunately, model conversion is not as simple as calling `ov.model_convert`. Empirically, an 8B parameter model cannot be compiled all at once on the NPU: even with RAM of 96 GB, memory runs out. To overcome this, we introduce the concept of *chunking* - breaking down the model into smaller pieces and compiling them individually. For instance, a chunking strategy that has been validated includes compiling the embedding and final linear layer separately, and compiling the 32 transformer layers on Llama-3-8B in groups of 16 (i.e. two chunks).
+
+Even this wasn't enough: compiling them all at once also threw an error. However, our solution involves the OpenVINO model cache: we first "warm up" each chunk by compiling and deleting the object one at a time. Then, with a cached model, compilation uses less resources and allows us to compile the entire model. In the LlamaPipeline class, we then interface the different models together.
+
+Note: We tested a full compilation of Llama3-8B with OpenVINO 2024.3, which still killed.
