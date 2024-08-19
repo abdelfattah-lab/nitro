@@ -18,3 +18,4 @@ cache/
 nc_workspace/
 
 config.json
+*.egg-info

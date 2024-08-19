@@ -6,7 +6,7 @@ example inputs in the convert_model function. When the model graph is complex
 This file provides helper functions to generate example_inputs.
 """
 import torch
-from nitro.pytorch_model.utils.model_utils import precompute_freqs_cis_rect
+from nitro.pytorch_model.utils.model_utils import precompute_freqs_cis
 from typing import Any
 
 def generate_x(model_args, conversion_args) -> torch.Tensor:
@@ -16,7 +16,7 @@ def generate_mask(model_args, conversion_args) -> torch.Tensor:
     return torch.full([model_args.max_batch_size, model_args.num_attention_heads, conversion_args.inference_size, model_args.max_seq_len], float('-inf'))
 
 def generate_freq_cis(model_args, conversion_args) -> torch.Tensor:
-    return precompute_freqs_cis_rect(
+    return precompute_freqs_cis(
                 model_args.hidden_size // model_args.num_attention_heads,
                 model_args.max_seq_len * 2,
                 model_args.rope_theta
@@ -28,6 +28,9 @@ def generate_kv_caches(model_args, conversion_args) -> dict[str, torch.Tensor]:
         params[f"cache_k_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.num_key_value_heads, model_args.hidden_size // model_args.num_attention_heads])
         params[f"cache_v_{i}"] = torch.zeros([model_args.max_batch_size, model_args.max_seq_len, model_args.num_key_value_heads, model_args.hidden_size // model_args.num_attention_heads])
     return params
+
+def generate_position_ids(model_args, conversion_args) -> torch.Tensor:
+    return torch.arange(conversion_args.inference_size)
 
 def generate_auto(model_args, conversion_args, *input_names:str) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     """
@@ -50,6 +53,7 @@ def generate_auto(model_args, conversion_args, *input_names:str) -> dict[str, to
     mapping = {
         "x" : generate_x,
         "mask" : generate_mask,
+        "position_ids" : generate_position_ids,
         "freqs_cis" : generate_freq_cis,
         "kv_caches" : generate_kv_caches,
     }

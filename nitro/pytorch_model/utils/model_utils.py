@@ -12,18 +12,17 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
         .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
     )
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+def precompute_freqs_cis_old(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device, dtype=torch.float16)
     freqs = torch.outer(t, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
     return freqs_cis
 
-def precompute_freqs_cis_rect(dim:int, end:int, theta:float = 10000.0):
-    return torch.view_as_real(precompute_freqs_cis(dim, end, theta))
+# def precompute_freqs_cis_rect(dim:int, end:int, theta:float = 10000.0):
+#     return torch.view_as_real(precompute_freqs_cis(dim, end, theta))
 
-def precompute_freqs_cis_rect_exp(dim: int, end: int, theta: float = 10000.0):
-    # TODO: VERIFY CORRECTNESS.
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device, dtype=torch.float16)
     freqs = torch.outer(t, freqs)

@@ -2,10 +2,14 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import math
-from nitro.pytorch_model.utils.model_utils import repeat_kv, apply_rotary_emb_rectangular
+from nitro.pytorch_model.utils.model_utils import repeat_kv, apply_rotary_emb_rectangular, precompute_freqs_cis
 from nitro.pytorch_model.llama.config import LlamaArgs
 
-class RMSNorm(torch.nn.Module):
+# class LlamaRotaryEmbedding(nn.Module):
+#     def __init__(self, params: LlamaArgs):
+#         self.params = params
+
+class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
@@ -54,11 +58,12 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,            # [B, L, D]
-        mask: torch.Tensor,         # [MB, ML, L, ML]
-        freqs_cis: torch.Tensor,    # []
-        cache_k: torch.Tensor,      # [MB, ML, KVH, H]
-        cache_v: torch.Tensor       # [MB, ML, KVH, H]
+        x: torch.Tensor,            
+        position_ids: torch.LongTensor,
+        freqs_cis: torch.Tensor,
+        mask: torch.Tensor,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor
     ):
         
         bsz, seqlen, _ = x.shape
@@ -70,9 +75,9 @@ class Attention(nn.Module):
 
         xq, xk = apply_rotary_emb_rectangular(xq, xk, freqs_cis=freqs_cis)
 
-        # It might be more efficient to use torch.roll. However, the Torchscript doesn't quite convert successfully.
-        cache_k = torch.cat((cache_k[:, seqlen:], xk), dim=1)
-        cache_v = torch.cat((cache_v[:, seqlen:], xv), dim=1)
+        # Slicing new q, k values into the cache.
+        cache_k.index_copy_(1, position_ids, xk)
+        cache_v.index_copy_(1, position_ids, xv)
 
         keys = cache_k[:bsz]
         values = cache_v[:bsz]
@@ -114,14 +119,15 @@ class TransformerBlock(nn.Module):
     @torch.inference_mode()
     def forward(
         self,
-        x: torch.Tensor,
-        mask: torch.Tensor,
+        x: torch.Tensor,            
+        position_ids: torch.LongTensor,
         freqs_cis: torch.Tensor,
+        mask: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor
     ):
         x_norm = self.input_layernorm(x)
-        out, cache_k, cache_v = self.self_attn(x_norm, mask, freqs_cis, cache_k, cache_v)
+        out, cache_k, cache_v = self.self_attn(x_norm, position_ids, freqs_cis, mask, cache_k, cache_v)
         h = x + out
         h_norm = self.post_attention_layernorm(h)
         out = h + self.mlp(h_norm)
@@ -134,44 +140,39 @@ class LlamaModel(nn.Module):
         self.vocab_size = params.vocab_size
         self.n_layers = params.num_hidden_layers
 
-        # Including statuses
-        self.include_embedding = False
-        self.include_transformer = False
-        self.include_output = False
-
-        # Parameters
-        self.offset = offset
-        self.chunk_size = -1
-        if self.chunk_size == -1:
-            self.chunk_size = self.n_layers
-
-
-        self.embed_tokens = nn.Embedding(
-            params.vocab_size, params.hidden_size
-        )
-
+        self.embed_tokens = nn.Embedding(params.vocab_size, params.hidden_size)
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.num_hidden_layers):
             self.layers.append(TransformerBlock(layer_id, params))
-
         self.norm = RMSNorm(params.hidden_size, eps=params.rms_norm_eps)
         self.lm_head = nn.Linear(
             params.hidden_size, params.vocab_size, bias=False
         )
 
-    def forward(self, x: torch.Tensor,
+        self.freqs_cis = precompute_freqs_cis(params.hidden_size // params.num_attention_heads, params.max_seq_len * 2, params.rope_theta)
+
+        # Including statuses
+        self.include_embedding = self.include_transformer = self.include_output = True
+
+        # Parameters
+        self.offset = offset
+        self.chunk_size = self.n_layers
+
+    def forward(self,
+                x: torch.Tensor,
+                position_ids: torch.LongTensor,
                 mask: torch.Tensor,
-                freqs_cis: torch.Tensor,
                 kv_caches: dict):
 
+        freqs_cis = self.freqs_cis[position_ids]
         if self.include_embedding:
-            x = self.embedding(x, mask, freqs_cis, kv_caches)
+            x = self.embedding(x, position_ids, freqs_cis, mask, kv_caches)
         
         if self.include_transformer:
-            x, cache_k_outs, cache_v_outs = self.transformer_chunk(x, mask, freqs_cis, kv_caches)
+            x, cache_k_outs, cache_v_outs = self.transformer_chunk(x, position_ids, freqs_cis, mask, kv_caches)
         
         if self.include_output:
-            x = self.output_chunk(x, mask, freqs_cis, kv_caches)
+            x = self.output_chunk(x, position_ids, freqs_cis, mask, kv_caches)
 
         out = x
 
@@ -186,29 +187,32 @@ class LlamaModel(nn.Module):
         return outputs
 
     def embedding(self, x: torch.Tensor,
-                mask: torch.Tensor,
+                position_ids: torch.LongTensor,
                 freqs_cis: torch.Tensor,
+                mask: torch.Tensor,
                 kv_caches: dict):
         
         return self.embed_tokens(x)
     
     def transformer_chunk(self, x: torch.Tensor,
-                mask: torch.Tensor,
+                position_ids: torch.LongTensor,
                 freqs_cis: torch.Tensor,
+                mask: torch.Tensor,
                 kv_caches: dict):
         
         cache_k_outs = []
         cache_v_outs = []
         for i in range(self.offset, self.offset + self.chunk_size):    
-            x, cache_k_out_, cache_v_out_ = self.layers[i](x, mask, freqs_cis, kv_caches[f'cache_k_{i}'], kv_caches[f'cache_v_{i}'])
+            x, cache_k_out_, cache_v_out_ = self.layers[i](x, position_ids, freqs_cis, mask, kv_caches[f'cache_k_{i}'], kv_caches[f'cache_v_{i}'])
             cache_k_outs.append(cache_k_out_)
             cache_v_outs.append(cache_v_out_)
 
         return x, cache_k_outs, cache_v_outs
     
     def output_chunk(self, x: torch.Tensor,
-                mask: torch.Tensor,
+                position_ids: torch.LongTensor,
                 freqs_cis: torch.Tensor,
+                mask: torch.Tensor,
                 kv_caches: dict):
         
         return self.lm_head(self.norm(x))

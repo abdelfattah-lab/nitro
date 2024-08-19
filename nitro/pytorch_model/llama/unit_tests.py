@@ -14,7 +14,7 @@ freqs_cis = precompute_freqs_cis(
     args.max_seq_len * 2,
     args.rope_theta)[:length]
 
-freqs_cis_rect = precompute_freqs_cis_rect(
+freqs_cis_rect = precompute_freqs_cis(
     args.dim // args.n_heads,
     args.max_seq_len * 2,
     args.rope_theta)[:length]
