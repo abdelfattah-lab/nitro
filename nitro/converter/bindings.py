@@ -5,7 +5,10 @@ from typing import Any
 classes_hierarchy = {
     "Llama" : {
         "meta-llama/Meta-Llama-3-8B",
-        "meta-llama/Meta-Llama-3.1-8B",
+    },
+    "Llama3.2" : {
+        "meta-llama/Llama-3.2-1B",
+        "meta-llama/Llama-3.2-3B",
     },
     "Qwen2" : {
         "Qwen/Qwen2-7B",
@@ -15,6 +18,7 @@ classes_hierarchy = {
 
 class_to_model = {
     "Llama" : LlamaModel,
+    "Llama3.2" : LlamaModel,
     "Qwen2" : Qwen2Model,
 }
 
