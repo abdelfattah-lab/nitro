@@ -6,6 +6,8 @@ import torch
 import time
 import numpy as np
 from typing import Optional
+from transformers import AutoTokenizer
+import json
 
 class OVWrapper:
     """
@@ -145,14 +147,18 @@ class LLMBase:
         model_dir = Path(model_dir)
         llm_dir = model_dir / "model"
         token_dir = model_dir / "tokenizer"
+        config = model_dir / "config.json"
+
+        with open(config, "r") as file:
+            json_config = json.load(file)
+            model_name = json_config["_name_or_path"]
 
         wrapper = OVWrapper if wrapper is None else wrapper
         self.model = wrapper(llm_dir, self.device, count,
                                verbose=verbose, warm_up=True, compile=compile)
         
-        core = ov.Core()
-        self.tokenizer = core.compile_model(token_dir / "openvino_tokenizer.xml", "CPU")
-        self.detokenizer = core.compile_model(token_dir / "openvino_detokenizer.xml", "CPU")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         self.parallel_inputs = {}
         self.series_inputs = {}
@@ -208,6 +214,7 @@ class LLMBase:
             tokens.append(token)
             output = self._iterate(token, i)
             token = np.argmax(output.squeeze()) # TODO: ADD OPTION FOR VARIATION
+            print(token, output.squeeze()[token])
 
             elapsed = time.time() - start
             average_time = (average_time * (i - start_idx) + elapsed) / (i - start_idx + 1)
@@ -221,7 +228,8 @@ class LLMBase:
         """
         Converts the list of prompts into a Python list of tokens.
         """
-        return list(self.tokenizer(prompt)["input_ids"].squeeze())
+        print(prompt)
+        return list(self.tokenizer.encode(prompt[0], return_tensors='pt').squeeze())
 
     def generate(self,
                  prompt: list[str],
@@ -247,5 +255,5 @@ class LLMBase:
         tokens = self._decode(tokens, next_token, max_new_tokens)
 
         # Detokenizer
-        outputs = self.detokenizer(np.array(tokens).reshape(1, -1))
-        return outputs["string_output"]
+        outputs = self.tokenizer.decode(tokens)
+        return outputs

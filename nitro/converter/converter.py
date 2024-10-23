@@ -85,14 +85,23 @@ class Converter:
 
         self.pytorch_model.load_state_dict(torch.load(self.directory / "model_weights.pth"))
     
-    def convert_chunks(self):
+    def convert_chunks(self, chunk:bool=True):
         # Generates example inputs for conversion
         example_inputs = generate_auto(self.model_args, self.conversion_args, "x", "mask", "freqs_cis", "kv_caches")
         shapes = generate_shape(example_inputs)
 
         # Conversion to IR Format / Chunking
-        self._convert_chunks(example_inputs, shapes)
+        if chunk:
+            self._convert_chunks(example_inputs, shapes)
+        else:
+            self._convert_entire(example_inputs, shapes)
 
+    def _convert_entire(self, example_inputs, shapes) -> None:
+        """
+        Converts the entire PyTorch LLM model as one OpenVINO.
+        """
+        self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = True, True, True
+        conversion_wrapper(self.pytorch_model, 0, self.llm_directory, example_inputs, shapes)
 
     def _convert_chunks(self, example_inputs, shapes) -> None:
         """
@@ -170,5 +179,6 @@ class Converter:
         print("Generating tokenizers...")
         hf_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         ov_tokenizer, ov_detokenizer = ot.convert_tokenizer(hf_tokenizer, with_detokenizer=True, skip_special_tokens=True)
+
         ov.save_model(ov_tokenizer, self.tokenizer_directory / "openvino_tokenizer.xml")
         ov.save_model(ov_detokenizer, self.tokenizer_directory / "openvino_detokenizer.xml")
