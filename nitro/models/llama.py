@@ -107,7 +107,7 @@ class LlamaPipeline(LLMBase):
             model_args = AutoConfig.from_pretrained(pretrained_model).to_dict()
             model_args["max_seq_len"] = max_seq_len
             model_args["max_batch_size"] = max_batch_size
-            model_args["rms_norm_eps"] = 5e-05 # epsilon must be greater for the NPU
+            model_args["rms_norm_eps"] = 1e-4 # epsilon must be greater for the NPU
             model_args["_name_or_path"] = pretrained_model
 
             model_args = from_dict(LlamaArgs, model_args)
@@ -122,7 +122,6 @@ class LlamaPipeline(LLMBase):
             converter = Converter(pretrained_model, model_dir, model_args, conversion_args)
             converter.initialize_model()
             converter.convert_chunks()
-            converter.generate_tokenizers()
             del converter
 
         # If not export, we assume that [pretrained_model] is a directory, with
@@ -132,7 +131,7 @@ class LlamaPipeline(LLMBase):
                 model_args = json.load(file)
             config_path = model_args["_name_or_path"]
             if config_path != pretrained_model:
-                raise ValueError(f"Model name found in config.json file does not match: {pretrained_model} expected, but found {config_path} instead")
+                raise ValueError(f"Model name found in config.json file does not match: {pretrained_model} expected, but found {config_path} instead!")
         
             model_args = from_dict(LlamaArgs, model_args)
         
