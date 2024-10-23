@@ -11,9 +11,11 @@ setup(
     url='https://github.com/abdelfattah-lab/nitro',
     packages=find_packages(),
     install_requires=[
+        'numpy < 1.27',
         'openvino >= 2024.3.0',
         'openvino-tokenizers >= 2024.3.0.0',
-        'torch >= 2.0.0'
+        'transformers >= 4.45',
+        'nncf'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

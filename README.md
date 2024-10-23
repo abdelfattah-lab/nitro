@@ -19,8 +19,13 @@ cd nitro
 ```
 Then, in the top-level directory, run:
 ```
-python setup.py
+python setup.py install
 pip install .
+```
+Then, install PyTorch of your choice. For instance, to install PyTorch for only
+CPU, run
+```
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 # Getting Started
 
