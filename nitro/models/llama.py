@@ -162,18 +162,19 @@ class LlamaPipeline(LLMBase):
         freqs_cis = torch.view_as_real(freqs_cis)
         return freqs_cis
 
-    def _iterate(self, token:int, step:int) -> torch.Tensor:
+    def _iterate(self, token:int) -> torch.Tensor:
         """
         Performs one iteration of the LLM: Inputs a token, returns the logits.
         """
-        self._update_freqs_cis(step)
-        self._update_mask(step)
+        self._update_freqs_cis(self.num_tokens)
+        self._update_mask(self.num_tokens)
         
         self.parallel_inputs["freqs_cis"] = self.freqs_cis
         self.parallel_inputs["mask"] = self.mask
         self.series_inputs["x"] = token
 
         output = self.model(self.parallel_inputs, self.series_inputs)
+
         return output
     
 

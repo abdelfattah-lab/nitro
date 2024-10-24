@@ -146,7 +146,6 @@ class LLMBase:
 
         model_dir = Path(model_dir)
         llm_dir = model_dir / "model"
-        token_dir = model_dir / "tokenizer"
         config = model_dir / "config.json"
 
         with open(config, "r") as file:
@@ -163,6 +162,9 @@ class LLMBase:
         self.parallel_inputs = {}
         self.series_inputs = {}
 
+        self.num_tokens : int = 0
+        self.tokens : list[int] = []
+
     def _print_if_verbose(self, *text) -> None:
         if self.verbose:
             print(*text)
@@ -177,7 +179,7 @@ class LLMBase:
         """
         raise NotImplementedError("Not implemented - must be specified in sub-classes.")
 
-    def _iterate(self, token:int, step:int) -> torch.Tensor:
+    def _iterate(self, token:int) -> torch.Tensor:
         """
         Performs one iteration of the LLM: Inputs a token, returns the logits. This
         acts as the middle translation layer.
@@ -192,7 +194,9 @@ class LLMBase:
         for i, token in enumerate(tokens):
             start = time.time()
 
-            _ = self._iterate(token, i)
+            _ = self._iterate(token)
+            self.num_tokens += 1
+            self.tokens.append(token)
             
             elapsed = time.time() - start
             average_time = (average_time * (i) + elapsed) / (i + 1)
@@ -200,29 +204,61 @@ class LLMBase:
             self._print_if_verbose(">>", elapsed)
         self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
             
-    def _decode(self, tokens:list[int], first_token:torch.Tensor, max_new_tokens:int) -> list[int]:
+    def _decode(self,
+                first_token: torch.Tensor,
+                max_new_tokens: int, 
+                variation: bool = False,
+                temperature: float = 0.3) -> list[int]:
         """
-        Decode stage.
+        Decode stage with an option for variation using temperature sampling.
+        
+        Args:
+            tokens:             List of token indices generated so far.
+            first_token:        The first token to start decoding from.
+            max_new_tokens:     The maximum number of new tokens to generate.
+            variation:          If True, use temperature sampling for variation. 
+                                If False, use deterministic argmax.
+            temperature:        Temperature value for sampling. Higher values increase
+                                randomness, while lower values make it more deterministic.
+        
+        Returns:
+            List of decoded token indices.
         """
+        # Need to make it so that "num_tokens" is an attribute of LLMBase.
+        # Currently feeding this in is very non-robust, and num_tokens can
+        # provide more flexibility for speculative decoding.
         token = first_token
-        start_idx = len(tokens)
+        assert self.num_tokens == len(self.tokens)
 
         average_time = 0
-        for i in range(start_idx, start_idx+max_new_tokens):
+        for i in range(max_new_tokens):
+            print(f"iterate {i}\n{token}")
             start = time.time()
-            
-            tokens.append(token)
-            output = self._iterate(token, i)
-            token = np.argmax(output.squeeze()) # TODO: ADD OPTION FOR VARIATION
-            print(token, output.squeeze()[token])
+
+            self.tokens.append(token)
+            self.num_tokens += 1
+            output = self._iterate(token)
+            logits = output.squeeze()
+
+            if variation:
+                logits = logits / temperature
+                probabilities = torch.softmax(torch.tensor(logits), dim=-1).numpy()
+                token = np.random.choice(len(probabilities), p=probabilities)
+                token = np.int64(token)
+
+            else:
+                token = np.argmax(logits)
+
+            print(self.tokenizer.decode(token), logits[token])
 
             elapsed = time.time() - start
-            average_time = (average_time * (i - start_idx) + elapsed) / (i - start_idx + 1)
+            average_time = (average_time * i + elapsed) / (i + 1)
             self._print_if_verbose(">>", elapsed)
         self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
 
-        tokens.append(token)
-        return tokens
+        self.tokens.append(token)
+        self.num_tokens += 1
+        return self.tokens
     
     def _generate_tokens(self, prompt) -> list[int]:
         """
@@ -248,12 +284,25 @@ class LLMBase:
         tokens = self._generate_tokens(prompt)
         next_token = tokens.pop()
 
+        print(tokens)
+        print(next_token, "\n")
+
         # Prefill
         self._prefill_sequential(tokens)
 
         # Generate
-        tokens = self._decode(tokens, next_token, max_new_tokens)
+        tokens = self._decode(next_token, max_new_tokens)
 
         # Detokenizer
+        print(tokens)
         outputs = self.tokenizer.decode(tokens)
         return outputs
+
+    def chat_generate(self,
+                 prompt: list[str],
+                 max_new_tokens: Optional[int]
+                 ) -> list[str]:
+        """
+        A chat interface for talking to a chat bot.
+        """
+        pass

@@ -31,13 +31,17 @@ class Converter:
     Class to convert provided PyTorch models into OpenVINO IR formats.
     """
 
-    def __init__(self, model:str, directory:Optional[str] = None, model_args:Optional[Any] = None, conversion_args:Optional[ConversionConfig] = None):
+    def __init__(self,
+                 model:str,
+                 directory:Optional[str] = None,
+                 model_args:Optional[Any] = None,
+                 conversion_args:Optional[ConversionConfig] = None):
         """
         Initializes a generic Converter.
 
         Params:
-            model (str): Name of the model as defined in Hugging Face (e.g. meta-llama/Meta-Llama-3).
-            dir (str): The directory to save the OpenVINO IR formats. If not specified, saves to 'ir_model' at working directory.
+            model: Name of the model as defined in Hugging Face (e.g. meta-llama/Meta-Llama-3).
+            dir: The directory to save the OpenVINO IR formats. If not specified, saves to 'ir_model' at working directory.
             model_args (Any): The model arguments to be passed.
         """
         self.model_name = model
@@ -62,14 +66,19 @@ class Converter:
             os.makedirs(self.tokenizer_directory)
 
     @classmethod
-    def convert(cls, model:str, directory:Optional[str] = None, args:Optional[Any] = None):
+    def convert(cls,
+                model:str,
+                directory:Optional[str] = None,
+                args:Optional[Any] = None):
+        """
+        Converts a model.
+        """
+
         converter = cls(model, directory, args)
         print("Initializing model")
         converter.initialize_model()
         print("Converting chunks")
         converter.convert_chunks()
-        print("Generating tokenizers")
-        converter.generate_tokenizers()
 
     def initialize_model(self):
         # Saves and loads the weights
@@ -176,6 +185,8 @@ class Converter:
         """
         Generates tokenizers.
         """
+
+        ## NOT CURRENTLY USED.
         print("Generating tokenizers...")
         hf_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         ov_tokenizer, ov_detokenizer = ot.convert_tokenizer(hf_tokenizer, with_detokenizer=True, skip_special_tokens=True)
