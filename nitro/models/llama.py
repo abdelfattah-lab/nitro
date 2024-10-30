@@ -1,7 +1,9 @@
-from nitro.models.base import LLMBase, OVWrapper
+from nitro.models.base import LLMBase, LLMPipeline
 from nitro.pytorch_model.llama.config import LlamaArgs
 
 from nitro.converter import Converter, ConversionConfig
+from nitro.models.configs import ModelConfig, GenerationConfig, VerboseConfig
+
 import gc
 
 import torch
@@ -23,7 +25,7 @@ def from_dict(cls, data: dict):
     valid_keys = {key: data[key] for key in data if key in cls.__annotations__}
     return cls(**valid_keys)
 
-class LlamaWrapper(OVWrapper):
+class LlamaBase(LLMBase):
     def __init__(self,
                  llm_dir: Path | str,
                  device: str,
@@ -60,17 +62,21 @@ class LlamaWrapper(OVWrapper):
                 inputs["x"] = output["x"]
         return output["logit"]
 
-class LlamaPipeline(LLMBase):
-    def __init__(self, model_dir: Path | str,
+class LlamaPipeline(LLMPipeline):
+    def __init__(self,
+                 model_config : ModelConfig,
+                 generation_config : GenerationConfig,
+                 verbose_config : VerboseConfig,
                  args:LlamaArgs,
                  count:int,
-                 device:str,
-                 compile:bool=True,
-                 compress:bool=True,
-                 verbose:bool=False
                  ):
         
-        super().__init__(model_dir, args, count, device, compile, compress, verbose, LlamaWrapper)
+        super().__init__(model_config, generation_config, verbose_config, args, count, LlamaBase)
+        
+        self.model_config = model_config
+        self.generation_config = generation_config
+        self.verbose_config = verbose_config
+        
         # Custom inputs
         self._freqs_cis = self._precompute_freqs_cis(args.hidden_size // args.num_attention_heads, args.max_seq_len * 2, args.rope_theta)
         self.freqs_cis = self._freqs_cis[0:1]
@@ -78,48 +84,42 @@ class LlamaPipeline(LLMBase):
     
     @classmethod
     def from_pretrained(cls,
-                        pretrained_model: str,
-                        model_dir : Path,
-                        max_batch_size: int,
-                        max_seq_len: int,
-                        chunk_size: int,
-                        inference_size: int = 1,
-                        export:bool = False,
+                        model_config : ModelConfig,
+                        generation_config : GenerationConfig,
+                        verbose_config : VerboseConfig,
                         **kwargs
                         ) -> "LlamaPipeline":
         """
         Generates the Llama model from source code.
 
         Params:
-            pretrained_model (str): The name of the model from HF. If export is set to False, then this value is ignored.
-            model_dir (str | Path): The path of the model to save configuration / OpenVINO models.
-            max_batch_size (int): the max batch size.
-            max_seq_len (int): maximum sequence length. 
-            chunk_size (int): number of decoder layers per chunk.
-            inference_size (int): the input size.
-            export (bool): If true, generates the model from scratch (LLM, tokenizers).
+            pretrained_model:   The name of the model from HF. If export is set to False, then this value is ignored.
+            model_dir:          The path of the model to save configuration / OpenVINO models.
+            max_seq_len:        Maximum sequence length. 
+            chunk_size:         Number of decoder layers per chunk.
+            inference_size:     The input size.
+            export:             If true, generates the model from scratch (LLM, tokenizers).
         """
 
         # If export, we are assuming [pretrained_model] is the name of the model.
-        if export:
-            if not os.path.exists(model_dir):
-                os.makedirs(model_dir)
-            model_args = AutoConfig.from_pretrained(pretrained_model).to_dict()
-            model_args["max_seq_len"] = max_seq_len
-            model_args["max_batch_size"] = max_batch_size
-            model_args["rms_norm_eps"] = 1e-4 # epsilon must be greater for the NPU
-            model_args["_name_or_path"] = pretrained_model
+        if model_config.export:
+            if not os.path.exists(model_config.model_dir):
+                os.makedirs(model_config.model_dir)
+            model_args = AutoConfig.from_pretrained(model_config.pretrained_model).to_dict()
+            model_args["max_seq_len"] = model_config.max_seq_len
+            model_args["rms_norm_eps"] = 1e-6 # epsilon must be greater for the NPU
+            model_args["_name_or_path"] = model_config.pretrained_model
 
             model_args = from_dict(LlamaArgs, model_args)
 
             # saving config file
             json_str = json.dumps(asdict(model_args), indent=4)
-            with open(Path(model_dir) / 'config.json', 'w') as json_file:
+            with open(Path(model_config.model_dir) / 'config.json', 'w') as json_file:
                 json_file.write(json_str)
 
-            conversion_args = ConversionConfig(chunk_size=chunk_size, inference_size=inference_size)
+            conversion_args = ConversionConfig(chunk_size=model_config.chunk_size, inference_size=1)
 
-            converter = Converter(pretrained_model, model_dir, model_args, conversion_args)
+            converter = Converter(model_config.pretrained_model, model_config.model_dir, model_args, conversion_args)
             converter.initialize_model()
             converter.convert_chunks()
             del converter
@@ -127,17 +127,17 @@ class LlamaPipeline(LLMBase):
         # If not export, we assume that [pretrained_model] is a directory, with
         # fully loaded configuration.
         else:
-            with open(Path(model_dir) / 'config.json', 'r') as file:
+            with open(Path(model_config.model_dir) / 'config.json', 'r') as file:
                 model_args = json.load(file)
             config_path = model_args["_name_or_path"]
-            if config_path != pretrained_model:
-                raise ValueError(f"Model name found in config.json file does not match: {pretrained_model} expected, but found {config_path} instead!")
+            if config_path != model_config.pretrained_model:
+                raise ValueError(f"Model name found in config.json file does not match: {model_config.pretrained_model} expected, but found {config_path} instead!")
         
             model_args = from_dict(LlamaArgs, model_args)
         
         # Counts the number of model chunks existing in the llm_dir.
         count = 0
-        llm_dir = Path(model_dir) / "model"
+        llm_dir = Path(model_config.model_dir) / "model"
         pattern = re.compile(r'^(\d+)\.xml$')
         for filename in os.listdir(llm_dir):
             match = pattern.match(filename)
@@ -149,7 +149,7 @@ class LlamaPipeline(LLMBase):
 
         gc.collect() # the converter object takes up a lot of space; make sure its cleared first.
 
-        return LlamaPipeline(model_dir, model_args, count, **kwargs)
+        return LlamaPipeline(model_config, generation_config, verbose_config, model_args, count, **kwargs)
 
     def _precompute_freqs_cis(self, dim: int, end: int, theta: float = 10000.0):
         """
@@ -174,6 +174,9 @@ class LlamaPipeline(LLMBase):
         self.series_inputs["x"] = token
 
         output = self.model(self.parallel_inputs, self.series_inputs)
+
+        self.tokens.append(token)
+        self.num_tokens += 1
 
         return output
     

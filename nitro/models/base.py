@@ -1,6 +1,5 @@
 from pathlib import Path
 import openvino as ov
-from typing import List
 import re
 import torch
 import time
@@ -9,7 +8,12 @@ from typing import Optional
 from transformers import AutoTokenizer
 import json
 
-class OVWrapper:
+from nitro.converter import Converter, ConversionConfig
+from nitro.models.configs import ModelConfig, GenerationConfig, VerboseConfig
+
+from typing import List, Dict, Union
+
+class LLMBase:
     """
     Base wrapper for the OpenVINO model. Abstracts the chunk inferences.
     """
@@ -22,16 +26,16 @@ class OVWrapper:
                  warm_up:bool = True,
                  compile:bool = True):
         """
-        Initializes OVChunk, a small wrapper and abstraction layer for chunks in
+        Initializes LLMBase, a small wrapper and abstraction layer for chunks in
         OpenVINO IR models. Reads and compiles the model. Requires that the llm_dir
         is properly set up, with correctly labeled IR chunks.
 
         Parameters:
-            llm_dir (Path | str):   Description of param1.
-            device (str):           the device to be compiled on.
-            num_chunks (int):       the number of chunks that exists. In llm_dir, these
-                                    will be enumerated as  0.xml, 1.xml, ... [num_chunks-1].xml.
-            compile (bool):         whether to compile the model. Defaults to true.
+            llm_dir:        Description of param1.
+            device:         the device to be compiled on.
+            num_chunks:     the number of chunks that exists. In llm_dir, these
+                            will be enumerated as  0.xml, 1.xml, ... [num_chunks-1].xml.
+            compile :       whether to compile the model. Defaults to true.
 
         Returns:
             type: Description of the return value.
@@ -128,23 +132,24 @@ class OVWrapper:
         if self.verbose:
             print(*text)
 
-class LLMBase:
+class LLMPipeline:
     """
-    Base model for LLM deployment.
+    The base model for LLM deployment.
     """
     
-    def __init__(self, model_dir: Path | str,
+    def __init__(self,
+                 model_config : ModelConfig,
+                 generation_config : GenerationConfig,
+                 verbose_config : VerboseConfig,
                  args,
                  count:int,
-                 device: List | str,
-                 compile:bool=True,
-                 compress:bool=True,
-                 verbose:bool=False,
-                 wrapper=None):
-        self.verbose = verbose
-        self.device = device
+                 wrapper:LLMBase
+                 ):
+        
+        self.verbose = verbose_config.verbose
+        self.device = generation_config.device
 
-        model_dir = Path(model_dir)
+        model_dir = Path(model_config.model_dir)
         llm_dir = model_dir / "model"
         config = model_dir / "config.json"
 
@@ -152,18 +157,25 @@ class LLMBase:
             json_config = json.load(file)
             model_name = json_config["_name_or_path"]
 
-        wrapper = OVWrapper if wrapper is None else wrapper
+        wrapper = LLMBase if wrapper is None else wrapper
+
+        # Initialize model
         self.model = wrapper(llm_dir, self.device, count,
-                               verbose=verbose, warm_up=True, compile=compile)
+                               verbose=verbose_config.verbose, warm_up=True, compile=True)
         
 
+        # Initialize tokenizers
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.terminators = {self.tokenizer.eos_token_id}
 
+        # Inputs
         self.parallel_inputs = {}
         self.series_inputs = {}
 
+        # Generation
         self.num_tokens : int = 0
-        self.tokens : list[int] = []
+        self.tokens : List[int] = []
+        self.current_logits : torch.Tensor = None
 
     def _print_if_verbose(self, *text) -> None:
         if self.verbose:
@@ -173,7 +185,7 @@ class LLMBase:
     def from_pretrained(cls,
                         max_batch_size:int,
                         n_sub_layers:int,
-                        ) -> "LLMBase":
+                        ) -> "LLMPipeline":
         """
         Generates the OpenVINO models, and initializes the script.
         """
@@ -181,12 +193,13 @@ class LLMBase:
 
     def _iterate(self, token:int) -> torch.Tensor:
         """
-        Performs one iteration of the LLM: Inputs a token, returns the logits. This
-        acts as the middle translation layer.
+        Performs one iteration of the LLM: Inputs a token, and sets self.logits
+        as the output. This method is in charge of updating [self.num_tokens],
+        [self.tokens], and [self.current_logits]
         """
         raise NotImplementedError("Not implemented - must be specified in sub-classes.")
 
-    def _prefill_sequential(self, tokens:list[int]) -> None:
+    def _prefill_sequential(self, tokens:List[int]) -> None:
         """
         Prefill stage.
         """
@@ -195,8 +208,6 @@ class LLMBase:
             start = time.time()
 
             _ = self._iterate(token)
-            self.num_tokens += 1
-            self.tokens.append(token)
             
             elapsed = time.time() - start
             average_time = (average_time * (i) + elapsed) / (i + 1)
@@ -208,37 +219,40 @@ class LLMBase:
                 first_token: torch.Tensor,
                 max_new_tokens: int, 
                 variation: bool = False,
-                temperature: float = 0.3) -> list[int]:
+                temperature: float = 0.2) -> list[int]:
         """
         Decode stage with an option for variation using temperature sampling.
+        The list of new generated tokens are also appended to self.tokens.
         
         Args:
-            tokens:             List of token indices generated so far.
             first_token:        The first token to start decoding from.
             max_new_tokens:     The maximum number of new tokens to generate.
             variation:          If True, use temperature sampling for variation. 
                                 If False, use deterministic argmax.
             temperature:        Temperature value for sampling. Higher values increase
                                 randomness, while lower values make it more deterministic.
-        
+
         Returns:
-            List of decoded token indices.
+            List of new decoded token indices.
         """
-        # Need to make it so that "num_tokens" is an attribute of LLMBase.
+        # Need to make it so that "num_tokens" is an attribute of LLMPipeline.
         # Currently feeding this in is very non-robust, and num_tokens can
         # provide more flexibility for speculative decoding.
         token = first_token
         assert self.num_tokens == len(self.tokens)
 
         average_time = 0
+
+        generated_tokens = []
         for i in range(max_new_tokens):
-            print(f"iterate {i}\n{token}")
             start = time.time()
 
-            self.tokens.append(token)
-            self.num_tokens += 1
             output = self._iterate(token)
+            generated_tokens.append(token)
             logits = output.squeeze()
+
+            if token in self.terminators:
+                break
 
             if variation:
                 logits = logits / temperature
@@ -249,28 +263,23 @@ class LLMBase:
             else:
                 token = np.argmax(logits)
 
-            print(self.tokenizer.decode(token), logits[token])
-
             elapsed = time.time() - start
             average_time = (average_time * i + elapsed) / (i + 1)
             self._print_if_verbose(">>", elapsed)
         self._print_if_verbose(f"Average token inference time: {average_time:.4f}")
 
-        self.tokens.append(token)
-        self.num_tokens += 1
-        return self.tokens
+        return generated_tokens
     
-    def _generate_tokens(self, prompt) -> list[int]:
+    def _generate_tokens(self, prompt) -> List[int]:
         """
         Converts the list of prompts into a Python list of tokens.
         """
-        print(prompt)
         return list(self.tokenizer.encode(prompt[0], return_tensors='pt').squeeze())
 
     def generate(self,
-                 prompt: list[str],
+                 prompt: List[str],
                  max_new_tokens: Optional[int]
-                 ) -> list[str]:
+                 ) -> List[str]:
         """
         Runs inference for text generation.
 
@@ -281,11 +290,11 @@ class LLMBase:
         Returns:
             tokens (list[str]): completed text, new tokens with original prompt.
         """
-        tokens = self._generate_tokens(prompt)
+        if not isinstance(prompt[0], str):
+            tokens = [torch.tensor(t) for t in prompt]
+        else:
+            tokens = self._generate_tokens(prompt)
         next_token = tokens.pop()
-
-        print(tokens)
-        print(next_token, "\n")
 
         # Prefill
         self._prefill_sequential(tokens)
@@ -294,15 +303,46 @@ class LLMBase:
         tokens = self._decode(next_token, max_new_tokens)
 
         # Detokenizer
-        print(tokens)
-        outputs = self.tokenizer.decode(tokens)
+        outputs = self.tokenizer.decode(tokens, skip_special_tokens=True)
         return outputs
-
+    
     def chat_generate(self,
-                 prompt: list[str],
-                 max_new_tokens: Optional[int]
-                 ) -> list[str]:
+                      max_new_tokens: int):
         """
-        A chat interface for talking to a chat bot.
+        Runs a chat bot for text generation. CURRENTLY ONLY FOR LLAMA 3.1.
         """
+        print("ChatBot powered by NITRO. Type 'exit' to exit.\n")
+        resume = False
+        while True:
+            prompt = input(">>>")
+            if prompt == "exit":
+                break
+            elif prompt == 'sequence':
+                print("<- SEQUENCE ->")
+                print(self.tokenizer.decode(self.tokens))
+                print("<- END SEQUENCE ->")
+                continue
+
+            prompt = self.tokenizer.apply_chat_template([{"role" : "user", "content" : prompt}], add_generation_prompt=True)
+            i = 0
+            # newline_token = self.tokenizer.encode('\n')[1]
+            # while i < len(prompt):
+            #     if i+2 < len(prompt) and prompt[i] == 128006 and prompt[i+2] == 128007:
+            #         prompt.insert(i, newline_token)
+            #         i += 1
+            #     i += 1
+            if not resume:
+                resume = True
+            else:
+                prompt.pop(0) # to get rid of the begin text
+                # prompt.insert(i, newline_token)
+                # print(prompt)
+                # print(self.tokenizer.decode(prompt))
+                # prompt = prompt[26:] # remove the system call. THIS IS HARD-CODED FOR LLAMA 3.1.
+
+            self._print_if_verbose(prompt)
+            self._print_if_verbose(self.tokenizer.decode(prompt))
+            print(self.generate(prompt, max_new_tokens))
+        
+        self._print_if_verbose(self.tokens)
         pass

@@ -1,4 +1,4 @@
-from nitro.models.base import LLMBase, OVWrapper
+from nitro.models.base import LLMPipeline, LLMBase
 from nitro.pytorch_model.qwen2.config import Qwen2Args
 
 from nitro.converter import Converter, ConversionConfig
@@ -23,7 +23,7 @@ def from_dict(cls, data: dict):
     valid_keys = {key: data[key] for key in data if key in cls.__annotations__}
     return cls(**valid_keys)
 
-class Qwen2Wrapper(OVWrapper):
+class Qwen2Base(LLMBase):
     def __init__(self,
                  llm_dir: Path | str,
                  device: str,
@@ -61,7 +61,7 @@ class Qwen2Wrapper(OVWrapper):
         return output["logit"]
 
 
-class Qwen2Pipeline(LLMBase):
+class Qwen2Pipeline(LLMPipeline):
     def __init__(self, model_dir: Path | str,
                  args:Qwen2Args,
                  count:int,
@@ -71,7 +71,7 @@ class Qwen2Pipeline(LLMBase):
                  verbose:bool=False
                  ):
         
-        super().__init__(model_dir, args, count, device, compile, compress, verbose, Qwen2Wrapper)
+        super().__init__(model_dir, args, count, device, compile, compress, verbose, Qwen2Base)
         # Custom inputs
         self._freqs_cis = self._precompute_freqs_cis(args.hidden_size // args.num_attention_heads, args.max_seq_len * 2, args.rope_theta)
         self.freqs_cis = self._freqs_cis[0:1]
