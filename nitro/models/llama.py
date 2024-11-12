@@ -60,7 +60,7 @@ class LlamaBase(LLMBase):
             output = model(inputs)
             if "x" in output:
                 inputs["x"] = output["x"]
-        return output["logit"]
+        return output["logits"]
 
 class LlamaPipeline(LLMPipeline):
     def __init__(self,
@@ -79,6 +79,8 @@ class LlamaPipeline(LLMPipeline):
         
         # Custom inputs
         self._freqs_cis = self._precompute_freqs_cis(args.hidden_size // args.num_attention_heads, args.max_seq_len * 2, args.rope_theta)
+
+        print(self._freqs_cis)
         self.freqs_cis = self._freqs_cis[0:1]
         self.mask = torch.full([args.max_batch_size, args.num_attention_heads, 1, args.max_seq_len], float('-inf'))
     
@@ -107,7 +109,7 @@ class LlamaPipeline(LLMPipeline):
                 os.makedirs(model_config.model_dir)
             model_args = AutoConfig.from_pretrained(model_config.pretrained_model).to_dict()
             model_args["max_seq_len"] = model_config.max_seq_len
-            model_args["rms_norm_eps"] = 1e-6 # epsilon must be greater for the NPU
+            model_args["rms_norm_eps"] = 5e-5 # epsilon must be greater for the NPU
             model_args["_name_or_path"] = model_config.pretrained_model
 
             model_args = from_dict(LlamaArgs, model_args)
@@ -117,12 +119,27 @@ class LlamaPipeline(LLMPipeline):
             with open(Path(model_config.model_dir) / 'config.json', 'w') as json_file:
                 json_file.write(json_str)
 
-            conversion_args = ConversionConfig(chunk_size=model_config.chunk_size, inference_size=1)
+            conversion_args = ConversionConfig(chunk_size=model_config.chunk_size,
+                                               inference_size=1,
+                                               compress=model_config.compress)
+            
+            converter = Converter(model_config.pretrained_model,
+                                  model_config.model_dir, "model",
+                                  model_args,
+                                  conversion_args)
 
-            converter = Converter(model_config.pretrained_model, model_config.model_dir, model_args, conversion_args)
             converter.initialize_model()
             converter.convert_chunks()
             del converter
+            gc.collect()
+
+            # PREFILL
+            # conversion_args = ConversionConfig(chunk_size=model_config.chunk_size, inference_size=model_config.max_seq_len)
+            # converter = Converter(model_config.pretrained_model, model_config.model_dir, "prefill_model", model_args, conversion_args)
+            # converter.initialize_model()
+            # converter.convert_chunks()
+            # del converter
+            # gc.collect()
 
         # If not export, we assume that [pretrained_model] is a directory, with
         # fully loaded configuration.

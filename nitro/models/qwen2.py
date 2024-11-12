@@ -58,7 +58,7 @@ class Qwen2Base(LLMBase):
             output = model(inputs)
             if "x" in output:
                 inputs["x"] = output["x"]
-        return output["logit"]
+        return output["logits"]
 
 
 class Qwen2Pipeline(LLMPipeline):

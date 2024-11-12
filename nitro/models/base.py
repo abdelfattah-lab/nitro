@@ -110,21 +110,21 @@ class LLMBase:
         raise NotImplementedError("Must be implemented in subclasses!")
     
     def __call__(self,
-                 parallel_inputs:dict[str, torch.Tensor],
-                 series_inputs:dict[str, torch.Tensor]
-                 ) -> dict[str, torch.Tensor]:
+                 parallel_inputs:Dict[str, torch.Tensor],
+                 series_inputs:Dict[str, torch.Tensor]
+                 ) -> Dict[str, torch.Tensor]:
         """
         Runs inference through the call.
 
         Parameters:
-            parallel_inputs (dict[str, torch.Tensor]):  Inputs that go into each model
+            parallel_inputs (Dict[str, torch.Tensor]):  Inputs that go into each model
                                                         at the start. Are not updated.
             
-            series_inputs (dict[str, torch.Tensor]):    Inputs that are sequentially fed
+            series_inputs (Dict[str, torch.Tensor]):    Inputs that are sequentially fed
                                                         through each layer.
         
         Returns:
-            outputs ((dict[str, torch.Tensor])):        Outputs to the whole.
+            outputs ((Dict[str, torch.Tensor])):        Outputs to the whole.
         """
         raise NotImplementedError("Must be implemented in subclasses!")
 

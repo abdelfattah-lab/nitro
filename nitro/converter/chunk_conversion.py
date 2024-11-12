@@ -4,6 +4,7 @@ from openvino.runtime.passes import Manager, MakeStateful
 import torch
 import numpy as np
 from typing import Any
+from nncf import compress_weights, CompressWeightsMode
 
 def get_param_names(model:ov.Model) -> dict[str, Any]:
     params = model.get_parameters()
@@ -110,7 +111,13 @@ def make_stateful(model: ov.Model):
     
     return model
 
-def conversion_wrapper(model, count, llm_dir, example_input, input_shapes):
+def conversion_wrapper(model,
+                       count,
+                       llm_dir,
+                       example_input,
+                       input_shapes,
+                       compress=None
+                       ):
     """
     Model conversion and saving.
     """
@@ -121,15 +128,14 @@ def conversion_wrapper(model, count, llm_dir, example_input, input_shapes):
         names.pop('kv_caches')
 
     filtered_input_shapes = {key: input_shapes[key] for key in names}
-    # print(filtered_input_shapes)
     ov_model.reshape(filtered_input_shapes)
     print(f"Saving model to [{count}.xml]...")
 
     ov_model = parse_and_rename_layers(ov_model) # for transformer blocks
     ov_model = make_stateful(ov_model)
 
-    # print(ov_model)
-
+    if compress:
+        ov_model = compress_weights(ov_model, mode=compress)
     ov.save_model(ov_model, llm_dir / f"{count}.xml")
 
     # Updating inputs

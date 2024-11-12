@@ -176,7 +176,7 @@ class Qwen2Model(nn.Module):
         out = x
 
         # Preparing the outputs for appropriate naming
-        outputs = {"logit" if self.include_output else "x" : out}
+        outputs = {"logits" if self.include_output else "x" : out}
         if self.include_transformer:
             for i in range(self.chunk_size):
                 outputs[f"cache_k_{i + self.offset}_out"] = cache_k_outs[i]

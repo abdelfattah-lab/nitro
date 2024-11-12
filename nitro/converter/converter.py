@@ -5,7 +5,7 @@ from typing import Optional, Any
 from dataclasses import dataclass
 from transformers import AutoModelForCausalLM
 from pathlib import Path
-
+from nncf import CompressWeightsMode
 from nitro.converter.bindings import get_args, get_model
 from nitro.converter.input_generators import generate_auto, generate_shape
 from nitro.converter.chunk_conversion import conversion_wrapper
@@ -20,6 +20,7 @@ import os
 class ConversionConfig:
     chunk_size:int = 16
     inference_size:int = 1
+    compress:CompressWeightsMode = None
 
 def from_dict(cls, data: dict):
     # Extract only the keys that are in the dataclass fields
@@ -34,6 +35,7 @@ class Converter:
     def __init__(self,
                  model:str,
                  directory:Optional[str] = None,
+                 subdirectory: Optional[str] = None,
                  model_args:Optional[Any] = None,
                  conversion_args:Optional[ConversionConfig] = None):
         """
@@ -47,6 +49,7 @@ class Converter:
         self.model_name = model
         self.model_args = model_args
         self.conversion_args = conversion_args
+        
         if conversion_args is None:
             self.conversion_args = ConversionConfig()
 
@@ -57,14 +60,12 @@ class Converter:
         if not os.path.isdir(self.directory):
             os.makedirs(self.directory)
         
-        self.llm_directory = self.directory / "model"
+        if not subdirectory: self.subdirectory = "model"
+        self.llm_directory = self.directory / subdirectory
         if not os.path.isdir(self.llm_directory):
             os.makedirs(self.llm_directory)
-
-        self.tokenizer_directory = self.directory / "tokenizer"
-        if not os.path.isdir(self.tokenizer_directory):
-            os.makedirs(self.tokenizer_directory)
-
+        
+        
     @classmethod
     def convert(cls,
                 model:str,
@@ -110,7 +111,7 @@ class Converter:
         Converts the entire PyTorch LLM model as one OpenVINO.
         """
         self.pytorch_model.include_embedding, self.pytorch_model.include_transformer, self.pytorch_model.include_output = True, True, True
-        conversion_wrapper(self.pytorch_model, 0, self.llm_directory, example_inputs, shapes)
+        conversion_wrapper(self.pytorch_model, 0, self.llm_directory, example_inputs, shapes, self.conversion_args.compress)
 
     def _convert_chunks(self, example_inputs, shapes) -> None:
         """
@@ -125,7 +126,7 @@ class Converter:
             kv_caches = True
             global_kv_caches = example_inputs["kv_caches"]
             example_inputs["kv_caches"] = torch.randn((1, 1))
-        conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
+        conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes, self.conversion_args.compress)
         count += 1
 
         ############ Chunking transformer layers ############
@@ -145,7 +146,7 @@ class Converter:
             print(f" > Block: {offset}-{offset + self.conversion_args.chunk_size-1}")
             self.pytorch_model.offset = offset
 
-            conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
+            conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes, self.conversion_args.compress)
             count += 1
 
         ############ Chunking output layer ############
@@ -155,7 +156,7 @@ class Converter:
         if kv_caches:
             example_inputs["kv_caches"] = torch.randn((1, 1))
 
-        conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes)
+        conversion_wrapper(self.pytorch_model, count, self.llm_directory, example_inputs, shapes, self.conversion_args.compress)
         count += 1
 
     def _save_weights(self) -> None:
