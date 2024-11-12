@@ -80,7 +80,6 @@ class LlamaPipeline(LLMPipeline):
         # Custom inputs
         self._freqs_cis = self._precompute_freqs_cis(args.hidden_size // args.num_attention_heads, args.max_seq_len * 2, args.rope_theta)
 
-        print(self._freqs_cis)
         self.freqs_cis = self._freqs_cis[0:1]
         self.mask = torch.full([args.max_batch_size, args.num_attention_heads, 1, args.max_seq_len], float('-inf'))
     
