@@ -23,4 +23,3 @@ class VerboseConfig:
     verbose : bool = False
     runtime : bool = False
     staging : bool = False
-    pass

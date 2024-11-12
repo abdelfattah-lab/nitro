@@ -24,16 +24,12 @@ generation_config = GenerationConfig(
 
 # Print statement configurations
 verbose_config = VerboseConfig(
-    verbose = True,
-    runtime = False,
-    staging = False
+    verbose = False
 )
 
 llama = LlamaPipeline.from_pretrained(model_config, generation_config, verbose_config)
 
 # For text generation
-out = llama.generate(prompt=["The weather outside is super cold, but"], max_new_tokens=30)
-print(out)
-
-# For a chat interface
-llama.chat_generate(max_new_tokens=30)
+prompt=["The weather outside is super cold, but"]
+out = llama.generate(prompt, max_new_tokens=30)
+print(prompt[0] + out)
