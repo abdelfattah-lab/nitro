@@ -45,6 +45,7 @@ Use the `from_pretrained` function, which will export the OpenVINO IR model and 
 | export: *(bool)*| Whether to generate the model from scratch. If not, the OpenVINO IR models will be used directly. It checks if `pretrained_model` matches the specified model in `model_dir/config.json`. |
 | do_chunk: *(bool)*| Whether to chunk the model into embedding, decoder chunks, and final FC layer. If not, the entire model will be converted as one OpenVINO IR model.                                                                  |
 | chunk_size: *(int)*| Size of each decoder layer chunk. The size must be a factor of the total number of decoder layers.|
+| compress: *(CompressWeightsMode)* | Whether to use NNCF's weight compression on the OpenVINO IR models. If set to `None`, no compression will be used. |
 
 **GenerationConfig** - the settings for generation.
 | Parameter          | Description                                                                                         |
