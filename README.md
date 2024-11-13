@@ -33,38 +33,78 @@ Import the Llama model:
 ```python
 from nitro import LlamaPipeline
 ```
-Use the `from_pretrained` function, which will generate the OpenVINO IR model for the model:
-```python
-llama = LlamaPipeline.from_pretrained(pretrained_model="meta-llama/Meta-LLama-3-8B",
-                                model_dir="openvino_llama",
-                                max_batch_size=1, max_seq_len=128, chunk_size=16,
-                                export=True,
-                                device="NPU",
-                                compile=True,
-                                compress=False,
-                                verbose=True)
-```
-The parameters are given as follows:
+## Exporting the Model
+Use the `from_pretrained` function, which will export the OpenVINO IR model and compile to the NPU (or CPU/GPU, if specified). There are three different configuration classes:
 
+**ModelConfig** - the settings for the exporting.
 | Parameter          | Description                                                                                         |
 |--------------------|-----------------------------------------------------------------------------------------------------|
-| `pretrained_model` | The name of the model, as defined in Hugging Face.                                                   |
-| `model_dir`        | The specified folder to save the loaded model information.                                           |
-| `max_batch_size`   | The maximum batch size. **Currently only supports 1.**                                               |
-| `max_seq_len`      | The maximum sequence length.                                                                         |
-| `export`           | Whether to generate the model from scratch. If not, the OpenVINO IR models will be used directly. It checks if `pretrained_model` matches the specified model in `model_dir/config.json`. |
-| `device`           | The device to compile the model on.                                                                  |
-| `compile`          | Whether to compile the model.                                                                        |
-| `compress`         | (Currently not a supported feature) Whether to use NNCF weight compression.                         |
+| pretrained_model: *(str)* | The name of the model, as defined in Hugging Face.|
+| model_dir: *(str)*| The specified folder to save the loaded model information.|
+| max_seq_len: *(int)*| The maximum sequence length.|
+| export: *(bool)*| Whether to generate the model from scratch. If not, the OpenVINO IR models will be used directly. It checks if `pretrained_model` matches the specified model in `model_dir/config.json`. |
+| do_chunk: *(bool)*| Whether to chunk the model into embedding, decoder chunks, and final FC layer. If not, the entire model will be converted as one OpenVINO IR model.                                                                  |
+| chunk_size: *(int)*| Size of each decoder layer chunk. The size must be a factor of the total number of decoder layers.|
+
+**GenerationConfig** - the settings for generation.
+| Parameter          | Description                                                                                         |
+|--------------------|-----------------------------------------------------------------------------------------------------|
+| device: *(str)* | What device to compile the model on. Uses OpenVINO's compile tool to check whether the device is detected or not. |
+| do_sample: *(bool)*| Whether to sample in text generation. If set to false, generation will use greedy sampling. |
+| temperature: *(float)*| Temperature of sampling: smaller values are more deterministic, larger values are more random. Ignored if `do_sample` is False. |
+
+**VerboseConfig** - the settings for output logs. Currently just one boolean, but finer configurations will be provided in a later release.
+
+| Parameter| Description|
+|--------------------|-----------------------------------------------------------------------------------------------------|
+| verbose: *(bool)* | Whether to output status information in the command line. |
+
+Below is an example of exporting the pretrained model Llama3-8B:
+```python
+# Model configurations for exporting and converting
+model_config = ModelConfig(
+    pretrained_model="meta-llama/Meta-Llama-3-8B",
+    model_dir="llama_8",
+    max_seq_len=128,
+    export=True,
+    do_chunk=True,
+    chunk_size=16,
+    compress=CompressWeightsMode.INT8_ASYM
+)
+
+# Generation process after exporting model
+generation_config = GenerationConfig(
+    device="NPU",
+    do_sample=False,
+    temperature=1.0
+)
+
+# Print statement configurations
+verbose_config = VerboseConfig(
+    verbose = False
+)
+
+llama = LlamaPipeline.from_pretrained(model_config,
+                                      generation_config,
+                                      verbose_config)
+```
 
 This will create the folder `openvino_llama` in the working directory.
 
-Finally, for text generation, use the `generate()` function:
+## Text Generation
+The `generate()` function enables text generation:
 ```python
-output = llama.generate(prompt=["I was wondering what is going on"],
-                        max_new_tokens=10)
+prompt=["The weather outside is super cold, but"]
+out = llama.generate(prompt, max_new_tokens=30)
+print(prompt[0] + out)
 ```
 To generate with the same model without rebuilding the model, set the `export` parameter to False.
+
+## Chat Generation
+The `chat_generate()` function will enable a REPL loop in the command line, enabling you to ask questions with a chatbot.
+```python
+llama.chat_generate(max_new_tokens=30)
+```
 
 # Developer Information
 
