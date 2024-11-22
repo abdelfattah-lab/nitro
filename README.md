@@ -7,8 +7,8 @@ NPUs currently do not support LLMs, some modifications have been made.
 
 ## Developer Notes
 This package has been validated on the Meteor Lake processor, with the Linux NPU
-Driver 1.6.0 and OpenVINO 2024.3.0. Currently, the frameworks supports Llama3,
-with some initial support for Qwen2.
+Driver 1.10.0 and OpenVINO 2024.4.0. Currently, the frameworks supports the Llama
+family models (Llama 3, 3.1, 3.2).
 
 # Installation
 
