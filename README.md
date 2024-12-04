@@ -10,6 +10,18 @@ This package has been validated on the Meteor Lake processor, with the Linux NPU
 Driver 1.10.0 and OpenVINO 2024.4.0. Currently, the frameworks supports the Llama
 family models (Llama 3, 3.1, 3.2).
 
+## Roadmap
+This package is in active development, and there are certain features that are currently
+in progress.
+
+- [ ] Prefill offloading to CPU
+- [ ] Computation on subset of KV-caches
+- [ ] Speculative Decoding
+      
+We are continuously enhancing this package and are always looking for contributors to
+help shape its future. If you're interested in collaborating, feel free to join us by
+opening an issue or submitting a pull request!  
+
 # Installation
 
 First, clone the repository:
@@ -106,8 +118,7 @@ The `chat_generate()` function will enable a REPL loop in the command line, enab
 ```python
 llama.chat_generate(max_new_tokens=30)
 ```
-
-# Developer Information
+# Framework Information
 
 This section aims to document the motivation, architecture, and components of NITRO.
 
@@ -125,4 +136,5 @@ Unfortunately, model conversion is not as simple as calling `ov.model_convert`. 
 
 Even this wasn't enough: compiling them all at once also threw an error. However, our solution involves the OpenVINO model cache: we first "warm up" each chunk by compiling and deleting the object one at a time. Then, with a cached model, compilation uses less resources and allows us to compile the entire model. In the LlamaPipeline class, we then interface the different models together.
 
-Note: We tested a full compilation of Llama3-8B with OpenVINO 2024.3, which still killed.
+---
+
