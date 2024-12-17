@@ -138,3 +138,15 @@ Even this wasn't enough: compiling them all at once also threw an error. However
 
 ---
 
+# Citation
+```bibtex
+@misc{fei2024nitrollminferenceintel,
+      title={NITRO: LLM Inference on Intel Laptop NPUs}, 
+      author={Anthony Fei and Mohamed S. Abdelfattah},
+      year={2024},
+      eprint={2412.11053},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2412.11053}, 
+}
+```
